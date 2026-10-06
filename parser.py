@@ -84,11 +84,15 @@ def segment_into_paragraphs(container: Tag) -> list[Tag]:
             name = child.name.lower()
             if name == "br":
                 flush_current()
+            elif name in {"div", "p", "section", "article"}:
+                flush_current()
+                sub_blocks = segment_into_paragraphs(child)
+                paragraphs.extend(sub_blocks)
             elif name in {"h1", "h2", "h3", "h4", "h5", "h6", "hr", "table", "ul", "ol", "blockquote"}:
                 flush_current()
                 paragraphs.append(child)
             else:
-                # وسوم نصية عادية مثل b, span, a, strong
+                # وسوم نصية سطرية عادية مثل b, span, a, strong, em, i
                 current_p.append(child)
         elif isinstance(child, NavigableString):
             s = str(child)

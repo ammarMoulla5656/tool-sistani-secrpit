@@ -63,7 +63,18 @@ class BookScraper:
         if meta.cover_url and self.config.include_cover:
             try:
                 c_data, c_mime = self.downloader.get_image(meta.cover_url)
-                ext = ".jpg" if "jpeg" in c_mime else (".png" if "png" in c_mime else ".jpg")
+                if "jpeg" in c_mime:
+                    ext = ".jpg"
+                elif "png" in c_mime:
+                    ext = ".png"
+                elif "gif" in c_mime:
+                    ext = ".gif"
+                elif "webp" in c_mime:
+                    ext = ".webp"
+                elif "svg" in c_mime:
+                    ext = ".svg"
+                else:
+                    ext = ".jpg"
                 cover_asset = ImageAsset(
                     source_url=meta.cover_url,
                     filename=f"cover{ext}",
