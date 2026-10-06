@@ -1,0 +1,240 @@
+@charset "UTF-8";
+
+/* ==========================================================================
+   Book2EPUB Arabic Typography Stylesheet
+   متوافق مع EPUB 3 و EPUB 2 والقارئات المختلفة (Apple Books, KOReader, Thorium, Kindle)
+   ملاحظة: اتجاه النص RTL محدد عبر السمة dir="rtl" في وسوم HTML/Body تماشيًا مع معايير W3C EPUB.
+   ========================================================================== */
+
+@namespace "http://www.w3.org/1999/xhtml";
+
+html {
+    text-align: right;
+}
+
+body {
+    text-align: right;
+    font-family: "Amiri", "Scheherazade New", "Simplified Arabic", "Traditional Arabic", "Noto Naskh Arabic", "Arial", serif;
+    font-size: 1.15em;
+    line-height: 1.85;
+    margin: 4% 5%;
+    color: #1a1a1a;
+    background-color: transparent;
+    -webkit-hyphens: none;
+    hyphens: none;
+    text-rendering: optimizeLegibility;
+}
+
+/* ---------------- العناوين وترتيب الأبواب ---------------- */
+
+h1, h2, h3, h4, h5, h6 {
+    text-align: center;
+    font-weight: bold;
+    line-height: 1.4;
+    page-break-after: avoid;
+    break-after: avoid;
+    margin-top: 1.5em;
+    margin-bottom: 0.8em;
+}
+
+h1.book-title {
+    font-size: 2.0em;
+    color: #1b365d;
+    margin-top: 2.0em;
+    margin-bottom: 1.2em;
+    border-bottom: 2px solid #1b365d;
+    padding-bottom: 0.3em;
+}
+
+h1.part-title {
+    font-size: 1.7em;
+    color: #0d5c3a;
+    margin-top: 1.8em;
+    margin-bottom: 1.0em;
+    border-bottom: 1px solid #c2d6cc;
+    padding-bottom: 0.2em;
+}
+
+h2.chapter-title {
+    font-size: 1.4em;
+    color: #1b4965;
+    text-align: right;
+    margin-top: 1.4em;
+    margin-bottom: 0.7em;
+    border-right: 4px solid #1b4965;
+    padding-right: 0.4em;
+}
+
+h3.section-title {
+    font-size: 1.2em;
+    color: #5c2018;
+    text-align: right;
+    margin-top: 1.2em;
+    margin-bottom: 0.5em;
+}
+
+/* ---------------- الفقرات والنصوص ---------------- */
+
+p {
+    text-align: justify;
+    text-justify: inter-word;
+    margin-top: 0;
+    margin-bottom: 0.85em;
+    text-indent: 0;
+}
+
+/* التأكيد والمسائل والترقيم */
+b, strong {
+    font-weight: bold;
+    color: #0f172a;
+}
+
+.masala-num {
+    font-weight: bold;
+    color: #7b1fa2;
+}
+
+/* ---------------- الحواشي والهوامش ---------------- */
+
+.footnote-separator {
+    border: 0;
+    border-top: 1px solid #cbd5e1;
+    width: 35%;
+    margin: 2em 0 1em auto;
+}
+
+p.footnote, .footnote {
+    font-size: 0.88em;
+    line-height: 1.6;
+    color: #475569;
+    text-align: justify;
+    margin-top: 0.3em;
+    margin-bottom: 0.4em;
+}
+
+/* ---------------- الصور والجداول ---------------- */
+
+img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 1.5em auto;
+}
+
+.cover-wrapper {
+    text-align: center;
+    padding: 0;
+    margin: 0;
+    height: 100%;
+}
+
+img.cover-image {
+    max-width: 100%;
+    max-height: 95vh;
+    margin: auto;
+    object-fit: contain;
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1.5em 0;
+}
+
+th, td {
+    border: 1px solid #cbd5e1;
+    padding: 0.5em 0.8em;
+    text-align: right;
+}
+
+th {
+    background-color: #f1f5f9;
+    font-weight: bold;
+}
+
+/* ---------------- الاقتباسات والقوائم ---------------- */
+
+blockquote {
+    margin: 1.2em 1.5em;
+    padding: 0.5em 1.0em;
+    border-right: 3px solid #94a3b8;
+    color: #334155;
+    background-color: #f8fafc;
+}
+
+ul, ol {
+    margin-right: 1.8em;
+    margin-top: 0.5em;
+    margin-bottom: 0.8em;
+    padding-right: 0.5em;
+}
+
+li {
+    margin-bottom: 0.4em;
+}
+
+/* ---------------- الروابط ---------------- */
+
+a {
+    color: #0369a1;
+    text-decoration: none;
+}
+
+a:hover, a:active {
+    text-decoration: underline;
+}
+
+/* ---------------- صفحة العنوان والمعلومات ---------------- */
+
+.title-page {
+    text-align: center;
+    margin-top: 15vh;
+}
+
+.title-page h1 {
+    font-size: 2.3em;
+    margin-bottom: 0.5em;
+    color: #0f172a;
+}
+
+.title-page .meta-author {
+    font-size: 1.3em;
+    color: #475569;
+    margin-top: 1.5em;
+}
+
+.title-page .meta-publisher {
+    font-size: 1.0em;
+    color: #64748b;
+    margin-top: 0.8em;
+}
+
+.title-page .meta-date {
+    font-size: 0.85em;
+    color: #94a3b8;
+    margin-top: 2em;
+}
+
+/* ---------------- الفهرس المدمج (nav.xhtml) ---------------- */
+
+nav.epub-toc ol {
+    list-style-type: none;
+    padding-right: 0;
+    margin-right: 0;
+}
+
+nav.epub-toc li {
+    margin-top: 0.5em;
+    margin-bottom: 0.5em;
+}
+
+nav.epub-toc li a {
+    color: #0f172a;
+    display: inline-block;
+}
+
+nav.epub-toc ol ol {
+    margin-right: 1.5em;
+    border-right: 1px dotted #cbd5e1;
+    padding-right: 0.8em;
+}

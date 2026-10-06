@@ -1,0 +1,18 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+logs/*.log
+*.log
+
+# OS / Shortcuts
+Thumbs.db
+Desktop.ini
+*.lnk
+.DS_Store
+
+# Temporary files
+*.tmp
+chk_*.epub
