@@ -139,6 +139,38 @@ python main.py --all "https://www.sistani.org/arabic/book/fatwa/"
 
 ---
 
+## 📑 نظام مزامنة وتطابق PDF مع EPUB (`pdfsync`)
+
+يتيح النظام دمج كتاب بصيغة **PDF** مع كتاب بصيغة **EPUB** لنفس العنوان، بحيث يُنتج ملف EPUB جديدًا تكون فيه **كل صفحة من صفحات PDF ممثلة بملف XHTML مستقل** داخل EPUB (`Text/page-0001.xhtml` إلى `Text/page-NNNN.xhtml`):
+
+* **PDF هو مصدر الحقيقة لـ**: عدد الصفحات، بداية ونهاية كل صفحة، ومكان انتقال النص من صفحة لأخرى.
+* **EPUB الأصلي هو مصدر الحقيقة لـ**: النص الكامل، علامات HTML/XHTML، التنسيق، الروابط، الحواشي، والصور (لا يُعدل النص الفقهي ولا يعاد صياغته).
+
+### 1. مزامنة كتاب كامل
+```bash
+python main.py sync --pdf "book.pdf" --epub "book.epub" -o "output/book_pages.epub"
+```
+
+### 2. مزامنة نطاق محدد من الصفحات (مثلاً من صفحة 10 إلى 50)
+```bash
+python main.py sync --pdf "book.pdf" --epub "book.epub" --pages 10-50 -o "output/subset.epub"
+```
+
+### 3. بناء EPUB مباشرة من رابط الويب ثم مزامنته مع PDF في خطوة واحدة
+```bash
+python main.py sync --pdf "book.pdf" --url "https://www.sistani.org/arabic/book/13/"
+```
+
+### 4. خيارات إضافية لأمر `sync`
+* `--text-order`: اتجاه استخراج نص PDF (`auto` افتراضي للكشف الذكي، أو `logical`، `reverse_chars`).
+* `--ocr`: خيار OCR كمسار احتياطي فقط عند وجود صفحات مصورة (`auto` افتراضي، `off`، `force`).
+* `--include-footnotes`: تضمين حواشي صفحة PDF في عملية المطابقة (افتراضياً تُستبعد لتجنب التشويش).
+* `--header-margin` / `--footer-margin`: نسبة الهامش العلوي والسفلي لاستبعاد الترويسات وأرقام الصفحات المتكررة في PDF تلقائياً.
+* `--page-offset`: إزاحة أرقام الصفحات الظاهرة في الفهرس (`page-list`).
+* `--report`: تخصيص مسار تقرير المطابقة التفصيلي بصيغة JSON.
+
+---
+
 ## 🛠️ كيفية إضافة موقع جديد (SiteAdapter)
 
 تم تصميم البرنامج وفق مبدأ **Open/Closed**:

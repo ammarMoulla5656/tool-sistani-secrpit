@@ -125,6 +125,11 @@ def process_single_book(url: str, config: Config) -> bool:
 
 
 def main() -> None:
+    # الأمر الفرعي الجديد: python main.py sync --pdf ... --epub ...  (الواجهة القديمة لم تتغير)
+    if len(sys.argv) > 1 and sys.argv[1] == "sync":
+        from pdfsync.cli import main as sync_main
+        sys.exit(sync_main(sys.argv[2:]))
+
     parser = argparse.ArgumentParser(
         description="Book2EPUB — أداة تحويل كتب الويب العربية إلى ملفات EPUB احترافية.",
         formatter_class=argparse.RawDescriptionHelpFormatter,

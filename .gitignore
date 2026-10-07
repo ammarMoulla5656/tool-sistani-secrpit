@@ -16,3 +16,6 @@ Desktop.ini
 # Temporary files
 *.tmp
 chk_*.epub
+tests/*.pdf
+tests/*.epub
+tests/*.json
