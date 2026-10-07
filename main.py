@@ -125,16 +125,23 @@ def process_single_book(url: str, config: Config) -> bool:
 
 
 def main() -> None:
-    # الأمر الفرعي الجديد: python main.py sync --pdf ... --epub ...  (الواجهة القديمة لم تتغير)
+    # تشغيل الواجهة الرسومية تلقائياً عند التشغيل بدون وسائط (النقر المزدوج على main.py) أو بأمر gui
+    if len(sys.argv) == 1 or (len(sys.argv) > 1 and sys.argv[1] in ("--gui", "-g", "gui")):
+        from gui import launch_gui
+        launch_gui()
+        return
+
+    # الأمر الفرعي لمزامنة PDF مع EPUB: python main.py sync --pdf ... --epub ...
     if len(sys.argv) > 1 and sys.argv[1] == "sync":
         from pdfsync.cli import main as sync_main
         sys.exit(sync_main(sys.argv[2:]))
 
     parser = argparse.ArgumentParser(
-        description="Book2EPUB — أداة تحويل كتب الويب العربية إلى ملفات EPUB احترافية.",
+        description="Book2EPUB — أداة تحويل كتب الويب العربية إلى ملفات EPUB احترافية ومزامنة PDF.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("url", nargs="?", help="رابط صفحة الكتاب (مثال: https://www.sistani.org/arabic/book/13/)")
+    parser.add_argument("--gui", "-g", action="store_true", help="تشغيل الواجهة الرسومية (GUI)")
     parser.add_argument("--all", action="store_true", help="استخراج جميع الكتب في رابط التصنيف (مثل /arabic/book/fatwa/)")
     parser.add_argument("--output", "-o", type=Path, help="مسار مجلد المخرجات أو اسم الملف")
     parser.add_argument("--split-mode", choices=["part", "page"], default="part", help="طريقة تقسيم الملفات: part (حسب الباب) أو page (ملف لكل صفحة ويب)")
