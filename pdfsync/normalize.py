@@ -96,3 +96,29 @@ def similarity(a: str, b: str) -> float:
     cb = Counter(b[i:i + 3] for i in range(len(b) - 2))
     inter = sum((ca & cb).values())
     return 2.0 * inter / ((len(a) - 2) + (len(b) - 2))
+
+
+# ---------------------------------------------------------------- أرقام PDF
+
+import re as _re
+
+_DIGIT_RUN = _re.compile(r"[\u0660-\u0669\u06F0-\u06F9]{2,}")
+_DIGIT_VAL = {chr(0x0660 + i): i for i in range(10)} | {chr(0x06F0 + i): i for i in range(10)}
+
+
+def reverse_digit_runs(text: str) -> str:
+    """يعكس كل تتابع من الأرقام العربية-الهندية (٢+ خانتين).
+
+    كثير من ملفات PDF العربية تُخرج الأعداد متعددة الخانات بترتيب بصري معكوس (١٠ تصبح ٠١).
+    """
+    return _DIGIT_RUN.sub(lambda m: m.group()[::-1], text)
+
+
+def digit_run_values(text: str) -> list[tuple[int, int]]:
+    """(القيمة كما هي، القيمة معكوسة) لكل تتابع أرقام متعدد الخانات — لاكتشاف اتجاه الأرقام."""
+    out = []
+    for m in _DIGIT_RUN.finditer(text):
+        s = m.group()
+        out.append((int("".join(str(_DIGIT_VAL[c]) for c in s)),
+                    int("".join(str(_DIGIT_VAL[c]) for c in s[::-1]))))
+    return out

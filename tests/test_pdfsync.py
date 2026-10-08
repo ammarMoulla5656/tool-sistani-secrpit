@@ -22,7 +22,7 @@ if str(BASE) not in sys.path:
 
 from lxml import etree
 from pdfsync.normalize import normalize_for_match, normalize_with_map, similarity
-from pdfsync.pdf_extract import PdfDocument, PdfPage, PdfTextBlock, classify_blocks
+from pdfsync.pdf_extract import PdfDocument, PdfPage, PdfTextBlock, _classify as classify_blocks
 from pdfsync.splitter import PageFragment, PageSplitter, collect_text
 from pdfsync.epub_source import SourceDoc, SourceEpub
 
@@ -128,7 +128,7 @@ class TestSplitter(unittest.TestCase):
         los = [0, mid]
         his = [mid, len(raw)]
 
-        splitter = PageSplitter(src, los, his)
+        splitter = PageSplitter(src, los, his, [0, 0], [0, 0], [1, 2])
         pages = splitter.build_all()
 
         total_extracted = "".join(collect_text(p.body) for p in pages)

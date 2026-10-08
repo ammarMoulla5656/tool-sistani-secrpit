@@ -262,35 +262,60 @@ class BookStudioGUI:
         ttk.Entry(r_out, textvariable=self.sync_out_var, font=FONT_NORMAL).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
         ttk.Button(r_out, text="حفظ باسم...", command=self._browse_save_epub).pack(side=tk.LEFT)
 
-        # خيارات المزامنة
-        grp_sync_opts = ttk.LabelFrame(frame, text=" خيارات وإعدادات المزامنة ", padding=10)
+        # خيارات المزامنة (pdfsync v2)
+        grp_sync_opts = ttk.LabelFrame(frame, text=" خيارات وإعدادات المزامنة المتقدمة (pdfsync v2) ", padding=10)
         grp_sync_opts.pack(fill=tk.X, pady=(0, 8))
 
+        # السطر 1: نطاق الصفحات واتجاهات النصوص والأرقام
         r_so1 = ttk.Frame(grp_sync_opts)
-        r_so1.pack(fill=tk.X, pady=2)
+        r_so1.pack(fill=tk.X, pady=3)
 
-        ttk.Label(r_so1, text="نطاق الصفحات (مثلاً 1-95 أو اترك فارغاً للكل):", font=FONT_NORMAL).pack(side=tk.LEFT)
+        ttk.Label(r_so1, text="نطاق الصفحات:", font=FONT_NORMAL).pack(side=tk.LEFT)
         self.sync_pages_var = tk.StringVar()
-        ttk.Entry(r_so1, textvariable=self.sync_pages_var, width=12).pack(side=tk.LEFT, padx=6)
+        ttk.Entry(r_so1, textvariable=self.sync_pages_var, width=10).pack(side=tk.LEFT, padx=(4, 12))
 
-        ttk.Label(r_so1, text="اتجاه نص PDF:", font=FONT_NORMAL).pack(side=tk.LEFT, padx=(12, 2))
+        ttk.Label(r_so1, text="اتجاه نص PDF:", font=FONT_NORMAL).pack(side=tk.LEFT)
         self.sync_text_order_var = tk.StringVar(value="auto")
         cb_order = ttk.Combobox(r_so1, textvariable=self.sync_text_order_var, values=["auto", "logical", "reverse_chars", "reverse_words"], width=13, state="readonly")
-        cb_order.pack(side=tk.LEFT)
+        cb_order.pack(side=tk.LEFT, padx=(4, 12))
 
-        ttk.Label(r_so1, text="وضع OCR:", font=FONT_NORMAL).pack(side=tk.LEFT, padx=(12, 2))
-        self.sync_ocr_var = tk.StringVar(value="auto")
-        cb_ocr = ttk.Combobox(r_so1, textvariable=self.sync_ocr_var, values=["auto", "off", "force"], width=10, state="readonly")
-        cb_ocr.pack(side=tk.LEFT)
+        ttk.Label(r_so1, text="اتجاه الأرقام (digits):", font=FONT_NORMAL).pack(side=tk.LEFT)
+        self.sync_digits_var = tk.StringVar(value="auto")
+        cb_digits = ttk.Combobox(r_so1, textvariable=self.sync_digits_var, values=["auto", "logical", "reversed"], width=10, state="readonly")
+        cb_digits.pack(side=tk.LEFT, padx=(4, 4))
 
+        # السطر 2: نقل الصور والدقة وإزاحة الصفحات
         r_so2 = ttk.Frame(grp_sync_opts)
-        r_so2.pack(fill=tk.X, pady=(4, 2))
+        r_so2.pack(fill=tk.X, pady=3)
 
-        self.sync_include_fn_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(r_so2, text="تضمين حواشي PDF في المطابقة", variable=self.sync_include_fn_var).pack(side=tk.LEFT, padx=4)
+        ttk.Label(r_so2, text="نقل صور PDF (images):", font=FONT_NORMAL).pack(side=tk.LEFT)
+        self.sync_images_var = tk.StringVar(value="auto")
+        cb_imgs = ttk.Combobox(r_so2, textvariable=self.sync_images_var, values=["auto", "off"], width=8, state="readonly")
+        cb_imgs.pack(side=tk.LEFT, padx=(4, 12))
+
+        ttk.Label(r_so2, text="دقة الصور (DPI):", font=FONT_NORMAL).pack(side=tk.LEFT)
+        self.sync_image_dpi_var = tk.StringVar(value="170")
+        ttk.Entry(r_so2, textvariable=self.sync_image_dpi_var, width=6).pack(side=tk.LEFT, padx=(4, 12))
+
+        ttk.Label(r_so2, text="إزاحة الترقيم (page_offset):", font=FONT_NORMAL).pack(side=tk.LEFT)
+        self.sync_page_offset_var = tk.StringVar(value="0")
+        ttk.Entry(r_so2, textvariable=self.sync_page_offset_var, width=6).pack(side=tk.LEFT, padx=(4, 4))
+
+        # السطر 3: مربعات الاختيار (الحواشي، الصور البديلة، الحواف، الفحص)
+        r_so3 = ttk.Frame(grp_sync_opts)
+        r_so3.pack(fill=tk.X, pady=(4, 2))
+
+        self.sync_split_notes_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(r_so3, text="فصل الحواشي لأسفل صفحاتها (split_notes)", variable=self.sync_split_notes_var).pack(side=tk.LEFT, padx=(0, 10))
+
+        self.sync_fallback_image_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(r_so3, text="صورة بديلة للصفحات الناقصة نصياً (fallback_image)", variable=self.sync_fallback_image_var).pack(side=tk.LEFT, padx=(0, 10))
+
+        self.sync_trim_edges_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(r_so3, text="حذف زوائد EPUB خارج نطاق PDF (trim_edges)", variable=self.sync_trim_edges_var).pack(side=tk.LEFT, padx=(0, 10))
 
         self.sync_validate_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(r_so2, text="فحص الملف الناتج بواسطة EPUBCheck", variable=self.sync_validate_var).pack(side=tk.LEFT, padx=12)
+        ttk.Checkbutton(r_so3, text="فحص EPUBCheck", variable=self.sync_validate_var).pack(side=tk.LEFT)
 
         # أزرار التشغيل
         f_sact = ttk.Frame(frame, padding=4)
@@ -299,11 +324,14 @@ class BookStudioGUI:
         self.btn_sync = ttk.Button(f_sact, text="⚡ بدء مزامنة وتوليد EPUB المقسم", style="Big.TButton", command=self._start_sync)
         self.btn_sync.pack(side=tk.LEFT, padx=4)
 
-        self.btn_open_report = ttk.Button(f_sact, text="📊 عرض تقرير المزامنة (JSON)", command=self._view_last_report, state=tk.DISABLED)
-        self.btn_open_report.pack(side=tk.LEFT, padx=4)
+        self.btn_open_report = ttk.Button(f_sact, text="📊 تقرير JSON", command=self._view_last_report, state=tk.DISABLED)
+        self.btn_open_report.pack(side=tk.LEFT, padx=3)
+
+        self.btn_open_reader = ttk.Button(f_sact, text="📖 مقارنة جنبًا إلى جنب", command=self._open_in_reader, state=tk.DISABLED)
+        self.btn_open_reader.pack(side=tk.LEFT, padx=3)
 
         self.lbl_sync_status = ttk.Label(f_sact, text="جاهز للمزامنة.", font=FONT_BOLD)
-        self.lbl_sync_status.pack(side=tk.LEFT, padx=12)
+        self.lbl_sync_status.pack(side=tk.LEFT, padx=10)
 
         # ملخص النتيجة
         self.grp_sync_result = ttk.LabelFrame(frame, text=" ملخص نتيجة المزامنة والتطابق ", padding=8)
@@ -316,6 +344,7 @@ class BookStudioGUI:
         self.txt_sync_summary.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.last_report_path: Path | None = None
+        self.last_sync_output: Path | None = None
 
     # -------------------------------------------------------------------------
     # التبويب 3: فاحص EPUBCheck
@@ -381,17 +410,19 @@ EPUB 3 متوافقة 100% مع معايير W3C الرسمية، مع الحف�
 • كاش ذكي (cache/) لحفظ الصفحات والصور لسرعة إعادة البناء دون اتصال بالإنترنت.
 
 --------------------------------------------------------------------------
-🌟 2. نظام مزامنة PDF مع EPUB (طبقة pdfsync):
+🌟 2. نظام مزامنة PDF مع EPUB (طبقة pdfsync v2):
 --------------------------------------------------------------------------
 • يدمج ملف PDF وملف EPUB لنفس الكتاب لإنتاج EPUB جديد تكون فيه كل صفحة PDF 
-  ممثلة بملف XHTML مستقل (page-0001.xhtml إلى page-NNNN.xhtml).
+  ممثلة بملف XHTML مستقل (page-0001.xhtml إلى page-NNNN.xhtml) ورقم الملف = رقم الصفحة دائماً.
 • قاعدة مصدر الحقيقة:
-   - PDF هو مصدر الحقيقة لـ: عدد الصفحات، بداية ونهاية كل صفحة، ومواضع الانتقال.
-   - EPUB هو مصدر الحقيقة لـ: النص، التنسيق، الروابط، الحواشي، والصور.
-• استخراج نصي عبر PyMuPDF مع إحداثيات الكتل دون الاعتماد على OCR كمسار أساسي.
-• كشف تلقائي للترويسات العلوية وأرقام الصفحات المتكررة واستبعادها تلقائياً.
-• مطابقة تسلسلية شاملة (Global Sequential Matching) بمؤشر متحرك يمنع القفزات الخاطئة.
-• نقاط ارتكاز متعددة (Anchors) وتطبيع مخصص للمقارنة فقط دون تغيير النص الفقهي النهائي.
+   - PDF هو مصدر الحقيقة لـ: عدد الصفحات، بداية ونهاية كل صفحة، ومواضع الانتقال والصور.
+   - EPUB هو مصدر الحقيقة لـ: النص، التنسيق، الروابط، والحواشي.
+• بدون OCR نهائياً: الصفحات المصورة (غلاف، لوحات) تُرسم بأعلى جودة كصورة من PDF نفسه.
+• فصل الحواشي (split_notes): تُفصل الحواشي عن المتن وتوضع أسفل صفحتها الأصلية بدقة.
+• كشف تلقائي للأرقام المعكوسة (digits auto) لمعالجة مشكلة اتجاه الأرقام في ملفات PDF العربية.
+• صور بديلة (fallback_image): أي صفحة PDF لا نص لها في EPUB تُدرج كصورة وتُسجل في التقرير.
+• مطابقة تسلسلية شاملة (Global Anchor-Chain Alignment) تمنع أي قفزات أو انهيار في الترتيب.
+• حفظ حرفي 100% لنص EPUB مع التحقق الآلي الصارم بعد الانتهاء.
 
 --------------------------------------------------------------------------
 🌟 3. فحص الجودة القياسي (W3C EPUBCheck 5.4.0):
@@ -570,8 +601,10 @@ EPUB 3 متوافقة 100% مع معايير W3C الرسمية، مع الحف�
         if not pdf_p or not Path(pdf_p).exists():
             messagebox.showwarning("تنبيه", "يرجى تحديد ملف PDF صالح وموجود على القرص.")
             return
-        if not epub_p or not Path(epub_p).exists():
-            messagebox.showwarning("تنبيه", "يرجى تحديد ملف EPUB صالح وموجود على القرص.")
+
+        is_url = epub_p.startswith("http://") or epub_p.startswith("https://")
+        if not is_url and (not epub_p or not Path(epub_p).exists()):
+            messagebox.showwarning("تنبيه", "يرجى تحديد ملف EPUB صالح وموجود على القرص، أو إدخال رابط ويب لكتاب في الموقع.")
             return
 
         pages_str = self.sync_pages_var.get().strip()
@@ -587,26 +620,53 @@ EPUB 3 متوافقة 100% مع معايير W3C الرسمية، مع الحف�
 
         out_path = Path(self.sync_out_var.get().strip()) if self.sync_out_var.get().strip() else None
 
-        self.btn_sync.configure(state=tk.DISABLED)
-        self.lbl_sync_status.configure(text="جاري تشغيل المزامنة واستخراج النصوص...")
-        self.txt_sync_summary.delete("1.0", tk.END)
+        try:
+            image_dpi = int(self.sync_image_dpi_var.get().strip() or "170")
+        except ValueError:
+            image_dpi = 170
 
-        opts = SyncOptions(
-            pdf=Path(pdf_p),
-            epub=Path(epub_p),
-            output=out_path,
-            page_range=page_range,
-            text_order=self.sync_text_order_var.get(),
-            ocr=self.sync_ocr_var.get(),
-            include_footnotes=self.sync_include_fn_var.get(),
-            validate=self.sync_validate_var.get(),
-            match=MatchSettings(),
-        )
+        try:
+            page_offset = int(self.sync_page_offset_var.get().strip() or "0")
+        except ValueError:
+            page_offset = 0
+
+        self.btn_sync.configure(state=tk.DISABLED)
+        self.lbl_sync_status.configure(text="جاري بدء عملية المزامنة...")
+        self.txt_sync_summary.delete("1.0", tk.END)
 
         def worker():
             try:
                 def on_msg(s):
                     self.root.after(0, lambda msg=s: self.lbl_sync_status.configure(text=msg))
+
+                source_epub = Path(epub_p)
+                if is_url:
+                    on_msg(f"🔍 بناء EPUB المصدر أولاً من الرابط: {epub_p}")
+                    scraper = BookScraper(self.config)
+                    book = scraper.scrape_book(epub_p)
+                    source_epub = self.config.output_dir / f"_source_for_sync_{book.book_id}.epub"
+                    builder = EPUBBuilder(book, self.config)
+                    source_epub = builder.build(source_epub)
+                    on_msg("✅ تم تجهيز EPUB المصدر، بدء المزامنة مع PDF...")
+
+                opts = SyncOptions(
+                    pdf=Path(pdf_p),
+                    epub=source_epub,
+                    output=out_path,
+                    page_range=page_range,
+                    text_order=self.sync_text_order_var.get(),
+                    digits=self.sync_digits_var.get(),
+                    header_frac=0.12,
+                    footer_frac=0.06,
+                    page_offset=page_offset,
+                    trim_edges=self.sync_trim_edges_var.get(),
+                    split_notes=self.sync_split_notes_var.get(),
+                    images=self.sync_images_var.get(),
+                    image_dpi=image_dpi,
+                    fallback_image=self.sync_fallback_image_var.get(),
+                    validate=self.sync_validate_var.get(),
+                    match=MatchSettings(),
+                )
 
                 res = run_sync(opts, self.config, progress=on_msg)
                 self.last_report_path = res.report_path
@@ -622,32 +682,49 @@ EPUB 3 متوافقة 100% مع معايير W3C الرسمية، مع الحف�
 
     def _render_sync_result(self, res: Any):
         self.btn_open_report.configure(state=tk.NORMAL)
+        self.btn_open_reader.configure(state=tk.NORMAL)
+        self.last_sync_output = res.output
         self.lbl_sync_status.configure(text="اكتملت المزامنة بنجاح!")
 
         r = res.report
-        s = r["summary"]
-        v = r["verification"]
-        ec = v["epubcheck"]
+        s = r.get("summary", {})
+        v = r.get("verification", {})
+        ec = v.get("epubcheck", {})
+
+        count_match = v.get("page_files_equal_pdf_pages") and v.get("page_file_numbers_equal_pdf_numbers")
+        body_preserved = v.get("body_text_preserved_exactly")
+        notes_preserved = v.get("notes_text_preserved_exactly")
 
         lines = [
             f"🎉 تم إنشاء كتاب EPUB المقسم بنجاح!",
-            f"📂 المسار النهائي     : {res.output}",
-            f"📄 عدد صفحات PDF    : {r['pdf_pages']} صفحة  (ملفات XHTML متطابقة تماماً: {'نعم ✅' if v['page_files_equal_pdf_pages'] else 'لا ❌'})",
-            f"🔤 اتجاه نص PDF     : {r['pdf_text_order']}",
-            f"🎯 إحصائيات الثقة     : {s['confidence']}  |  متوسط دقة التشابه: {s['mean_score']}",
-            f"🛡️ الحفاظ على النص   : {'نعم، النص محفوظ بنسبة 100% دون أي تعديل فقهي ✅' if v['text_preserved_exactly'] else '❌ تنبيه: هناك اختلاف'}",
+            f"📂 المسار النهائي       : {res.output}",
+            f"📄 صفحات PDF المستهدفة : {r.get('pdf_pages', 0)} من إجمالي {r.get('pdf_total_pages_in_file', 0)} صفحة",
+            f"📑 تطابق ملفات الصفحات : {'نعم، كل صفحة PDF = ملف xhtml مستقل برقمها تماماً ✅' if count_match else '❌ تنبيه: عدم تطابق'}",
+            f"🔤 قراءة النص والأرقام   : اتجاه النص ({r.get('pdf_text_order')}) | الأرقام ({'معكوسة في PDF وتم تصحيحها' if r.get('pdf_digits_reversed') else 'عادية'})",
+            f"🎯 متوسط دقة التشابه     : {s.get('mean_score', 0):.2%}  |  حالات الصفحات: {s.get('status', {})}",
+            f"🛡️ حفظ متن EPUB الأصلي  : {'نعم، محفوظ حرفياً بنسبة 100% دون أي تبديل فقهي ✅' if body_preserved else '❌ تنبيه: هناك اختلاف في المتن'}",
+            f"📝 حفظ نصوص الحواشي     : {'نعم، الحواشي مفصولة ومسندة لصفحاتها بنسبة 100% ✅' if notes_preserved else '❌ تنبيه: هناك اختلاف في الحواشي'}",
         ]
-        if ec.get("ran"):
-            lines.append(f"🔬 فحص EPUBCheck     : {ec['fatals']} Fatals / {ec['errors']} Errors / {ec['warnings']} Warnings")
-            if ec["valid"]:
-                lines.append("   ✅ الكتاب سليم 100% ومطابق لمعايير W3C القياسية.")
 
-        if s.get("scanned_pages"):
-            lines.append(f"🖼️ صفحات مصورة (Scanned): {s['scanned_pages']}")
+        if s.get("image_pages"):
+            lines.append(f"🖼️ صفحات مصورة/غلاف  : {len(s['image_pages'])} صفحة {s['image_pages']}")
+        if s.get("blank_pages"):
+            lines.append(f"⚪ صفحات فارغة        : {len(s['blank_pages'])} صفحة {s['blank_pages']}")
+        if s.get("pages_needing_review"):
+            lines.append(f"⚠️ صفحات يُوصى بمراجعتها: {len(s['pages_needing_review'])} صفحة {s['pages_needing_review']}")
+
+        d = r.get("dropped_epub_text", {})
+        if d.get("before_first_page_chars") or d.get("after_last_page_chars"):
+            lines.append(f"✂️ نصوص خارج نطاق PDF  : قبل={d.get('before_first_page_chars', 0)} حرفاً، بعد={d.get('after_last_page_chars', 0)} حرفاً")
+
+        if ec.get("ran"):
+            lines.append(f"🔬 فحص EPUBCheck       : {ec.get('fatals', 0)} Fatals / {ec.get('errors', 0)} Errors / {ec.get('warnings', 0)} Warnings")
+            if ec.get("valid"):
+                lines.append("   ✅ الكتاب سليم 100% ومطابق لمعايير W3C القياسية.")
 
         txt_str = "\n".join(lines)
         self.txt_sync_summary.insert(tk.END, txt_str)
-        messagebox.showinfo("نجاح المزامنة", "تمت عملية مزامنة PDF مع EPUB بنجاح فائق!")
+        messagebox.showinfo("نجاح المزامنة", "تمت عملية مزامنة PDF مع EPUB بنجاح وبأعلى معايير الدقة!")
 
     def _view_last_report(self):
         if self.last_report_path and self.last_report_path.exists():
@@ -659,6 +736,29 @@ EPUB 3 متوافقة 100% مع معايير W3C الرسمية، مع الحف�
                     subprocess.Popen(["xdg-open", str(self.last_report_path)])
             except Exception as e:
                 messagebox.showerror("خطأ", f"تعذر فتح ملف التقرير: {e}")
+
+    def _open_in_reader(self):
+        reader_script = BASE_DIR / "epub_reader.py"
+        if not reader_script.exists():
+            messagebox.showinfo("معلومة", "ملف قارئ المقارنة epub_reader.py غير موجود.")
+            return
+        if not self.last_sync_output or not Path(self.last_sync_output).exists():
+            messagebox.showinfo("معلومة", "لم يتم العثور على ملف EPUB الناتج.")
+            return
+
+        pdf_p = self.sync_pdf_var.get().strip()
+        cmd = [sys.executable, str(reader_script), str(self.last_sync_output)]
+        if pdf_p and Path(pdf_p).exists():
+            cmd.append(str(pdf_p))
+
+        try:
+            import subprocess
+            subprocess.Popen(cmd)
+        except Exception as e:
+            messagebox.showerror(
+                "خطأ في تشغيل القارئ",
+                f"تعذر تشغيل القارئ: {e}\n\nملاحظة: يتطلب قارئ المقارنة تثبيت PyQt6 عبر:\npip install PyQt6 PyQt6-WebEngine pymupdf"
+            )
 
     # -------------------------------------------------------------------------
     # منطق فحص EPUBCheck المنفرد

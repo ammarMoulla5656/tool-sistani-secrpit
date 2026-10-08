@@ -1,26 +1,26 @@
 """
-pdfsync/matcher.py — المطابقة التسلسلية الشاملة (Global Sequential Matching).
+pdfsync/matcher.py — المطابقة الشاملة بسلسلة المرتكزات (Global Anchor-Chain Alignment).
 
-الفكرة: كتاب واحد بصفحات مرتبة، فنحرّك مؤشرًا (cursor) داخل النص المُطبَّع للـEPUB:
-    صفحة PDF 1 -> نجد مجالها في EPUB
-    صفحة PDF 2 -> نبحث بعد نهاية مجال الصفحة 1  ...وهكذا
-فلا تُطابَق أي صفحة بمعزل عن بقية الكتاب، وتنخفض جدًا احتمالات التطابق الخاطئ.
+المشكلة: نص PDF المستخرج مشوّش (أرقام معكوسة، كلمات مقطّعة، رموز شاذة، ترويسات)،
+والمطابقة الجشعة صفحةً بصفحة تنهار عند أول خلل ثم تُفسد كل ما بعده.
 
-لكل صفحة نستخدم نقاط ارتكاز متعددة (Anchors): بداية، منتصف (وربع/ثلاثة أرباع للصفحات
-الطويلة)، نهاية. كل نقطة تصوّت على موضع بداية الصفحة (diagonal = موضع الإصابة − موضع
-النقطة داخل الصفحة)، وتُجمَّع الأصوات في عناقيد؛ يُختار العنقود الأكثر دعمًا ثم يُتحقق
-منه بدرجة تشابه على كامل نص الصفحة.
+الحل — نعالج الكتاب كله دفعة واحدة:
+  1) نبني فهرس k-gram (افتراضيًا 8 أحرف مُطبَّعة ≈ كلمتان) لنص EPUB، ونحتفظ بالمقاطع
+     النادرة فقط (تتكرر ≤ max_occ مرة).
+  2) نجمع نص كل صفحات PDF في تيار واحد، ونأخذ مقاطعه التي ظهرت مرة واحدة في PDF ونادرة في EPUB:
+     كل مقطع يعطي نقطة (موضعه في PDF، موضعه في EPUB).
+  3) نختار أطول سلسلة متزايدة (LIS) من هذه النقاط: أي إصابة شاذة (مطابقة عرَضية في مكان آخر)
+     تسقط تلقائيًا لأنها تخالف الترتيب العام، ثم نحذف ما يخالف الانحراف المحلي.
+  4) نشتق بداية كل صفحة من أقرب نقطة ارتكاز (مع استيفاء خطي عند البعد) ثم نصقلها محليًا.
 
-سلّم الاحتياط (لا نستخدم fuzzy matching بشكل أعمى):
-  1) تطابق تام بعد التطبيع بنقاط ارتكاز متعددة داخل نافذة بحث حول المؤشر.
-  2) تصويت q-gram على كامل نص الصفحة داخل النافذة، مع حد أدنى لدرجة التشابه.
-  3) توسيع النافذة ثم إعادة المزامنة الشاملة (بشروط أشد).
-  4) استيفاء داخلي (Interpolation) تناسبيًا بين صفحتين مطابقتين، مع وسم الثقة "منخفضة".
+النتيجة: حدود صفحات متسقة ومرتبة حتمًا، وتتحمل مقاطع كاملة من التشويش دون انهيار متسلسل.
+تُطبَّق الخوارزمية نفسها على تيارين مستقلين: المتن، والحواشي.
 """
 from __future__ import annotations
 
 import difflib
 import logging
+from bisect import bisect_left
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -32,208 +32,362 @@ logger = logging.getLogger("book2epub.pdfsync.matcher")
 
 @dataclass
 class MatchSettings:
-    anchor_len: int = 24            # طول نقطة الارتكاز (أحرف مُطبَّعة ≈ 5 كلمات)
-    min_page_chars: int = 12        # أقل طول لنص صفحة قابل للمطابقة المستقلة
-    accept_score: float = 0.55      # أدنى تشابه لقبول مطابقة غير تامة
-    exact_score: float = 0.85       # تشابه يُعدّ معه التطابق "تامًا/عالي الثقة"
-    window_factor: float = 2.5      # حجم نافذة البحث نسبةً لطول الصفحة
-    base_window: int = 3000         # حد أدنى ثابت لنافذة البحث (أحرف)
-    qgram: int = 6
-    qgram_step: int = 3
-    qgram_min_ratio: float = 0.18
-    global_resync: bool = True
-    include_footnotes: bool = False
+    anchor_len: int = 8             # طول k-gram (أحرف مُطبَّعة)
+    max_occ: int = 3                # أقصى تكرار للمقطع في EPUB ليصلح مرتكزًا
+    accept_score: float = 0.55      # أدنى تشابه لاعتبار صفحة "موثوقة"
+    exact_score: float = 0.85       # تشابه عالي الثقة
+    diag_window: int = 5            # نافذة مرشّح الانحراف (عدد نقاط على كل جهة)
+    diag_tol: int = 80              # أقصى انحراف مسموح عن الوسيط المحلي (أحرف)
+    near_anchor: int = 90           # أقصى بعد عن مرتكز لاعتماد الانحراف المحلي مباشرة
+    refine_radius: int = 60
+    include_footnotes: bool = False  # (للتوافق) لا أثر له: الحواشي تُطابَق في تيار مستقل
 
 
 @dataclass
 class PageMatch:
-    page: int                       # رقم صفحة PDF
+    page: int
     pdf_chars: int = 0
-    status: str = "unmatched"       # exact | fuzzy | interpolated | empty | unmatched
-    start: int | None = None        # فهرس البداية في النص المُطبَّع E
+    status: str = "unmatched"       # exact | fuzzy | partial | interpolated | missing | empty | unmatched
+    start: int | None = None        # بداية الصفحة في النص المُطبَّع (قبل الاستيفاء)
     end: int | None = None
     score: float = 0.0
     anchors_hit: int = 0
     anchors_total: int = 0
-    boundary: int = 0               # فهرس القص النهائي (بداية الصفحة) في E
-    raw_start: int = 0              # موضع القص في النص الخام
+    boundary: int = 0               # بداية القص النهائية في النص المُطبَّع
+    raw_start: int = 0
     raw_end: int = 0
     notes: list[str] = field(default_factory=list)
 
     @property
     def confidence(self) -> str:
+        if self.status == "empty":
+            return "n/a"
         if self.status == "exact" and self.score >= 0.85:
             return "high"
         if self.status in ("exact", "fuzzy") and self.score >= 0.55:
             return "medium"
-        if self.status == "empty":
-            return "n/a"
-        return "low"
+        return "low"      # interpolated | partial | missing | unmatched
 
 
-# ------------------------------------------------------------------ أدوات البحث
+# ------------------------------------------------------------------ بناء المرتكزات
 
-def _find_all(text: str, needle: str, lo: int, hi: int, limit: int = 12) -> list[int]:
-    out: list[int] = []
-    p = text.find(needle, lo, hi)
-    while p != -1 and len(out) < limit:
-        out.append(p)
-        p = text.find(needle, p + 1, hi)
+def _build_index(E: str, k: int, max_occ: int) -> dict[str, list[int]]:
+    idx: dict[str, list[int]] = {}
+    cap = max_occ + 1
+    for i in range(len(E) - k + 1):
+        g = E[i:i + k]
+        lst = idx.get(g)
+        if lst is None:
+            idx[g] = [i]
+        elif len(lst) < cap:
+            lst.append(i)
+    return {g: l for g, l in idx.items() if len(l) <= max_occ}
+
+
+def _lis(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """أطول سلسلة متزايدة (بدقة) في (j, pos). تُرتَّب النقاط (j تصاعدي، pos تنازلي عند التساوي)."""
+    if not points:
+        return []
+    points = sorted(points, key=lambda t: (t[0], -t[1]))
+    tails: list[int] = []        # أصغر pos ينهي سلسلة بطول i+1
+    tails_idx: list[int] = []    # فهرس النقطة المقابلة
+    prev = [-1] * len(points)
+    for n, (_, pos) in enumerate(points):
+        i = bisect_left(tails, pos)
+        if i == len(tails):
+            tails.append(pos)
+            tails_idx.append(n)
+        else:
+            tails[i] = pos
+            tails_idx[i] = n
+        prev[n] = tails_idx[i - 1] if i > 0 else -1
+    out: list[tuple[int, int]] = []
+    n = tails_idx[-1]
+    while n != -1:
+        out.append(points[n])
+        n = prev[n]
+    out.reverse()
     return out
 
 
-def _anchor_offsets(L: int, K: int) -> list[tuple[int, str]]:
-    offs: list[tuple[int, str]] = [(0, "start")]
-    if L > K:
-        offs.append((L - K, "end"))
-    span = max(0, L - K)
-    mids = [span // 2]
-    if L > 1200:
-        mids += [span // 4, (3 * span) // 4]
-    for m in mids:
-        if all(m != o for o, _ in offs):
-            offs.append((m, "mid"))
-    return offs
+def _filter_diagonal(chain: list[tuple[int, int]], window: int, tol: int) -> list[tuple[int, int]]:
+    """حذف النقاط المنحرفة عن الانحراف المحلي (الفرق pos - j) لجيرانها."""
+    if len(chain) < 3:
+        return chain
+    kept = chain
+    for _ in range(2):
+        d = [q - j for j, q in kept]
+        out = []
+        for i, pt in enumerate(kept):
+            lo, hi = max(0, i - window), min(len(kept), i + window + 1)
+            nb = sorted(d[lo:i] + d[i + 1:hi])
+            if not nb:
+                out.append(pt)
+                continue
+            med = nb[len(nb) // 2]
+            if abs(d[i] - med) <= tol:
+                out.append(pt)
+        if len(out) == len(kept):
+            break
+        kept = out
+    return kept
 
 
-def _refine_start(P: str, E: str, s_est: int, tol: int) -> int | None:
-    """تدقيق موضع البداية موضعيًا عبر محاذاة رأس الصفحة مع جوار التقدير."""
-    head = P[: min(len(P), 48)]
-    lo = max(0, s_est - tol)
-    hi = min(len(E), s_est + tol + len(head))
-    win = E[lo:hi]
-    if not win or not head:
-        return None
-    sm = difflib.SequenceMatcher(None, win, head, autojunk=False)
-    for blk in sm.get_matching_blocks():
-        if blk.size >= 5:
-            cand = lo + blk.a - blk.b
-            return max(0, cand)
-    return None
+def _prefer_latest(chain: list[tuple[int, int]], P: str, idx: dict[str, list[int]], k: int) -> list[tuple[int, int]]:
+    """عند تكرار فقرة في EPUB (نسختان متطابقتان) نفضّل النسخة الأحدث التي تبقي السلسلة متزايدة،
+    فيبقى النص المكرر الزائد قبل بداية الصفحة لا داخلها."""
+    out = list(chain)
+    bound = None
+    for n in range(len(out) - 1, -1, -1):
+        j, q = out[n]
+        alts = idx.get(P[j:j + k], ())
+        best = q
+        for a in alts:
+            if a > best and (bound is None or a < bound):
+                best = a
+        out[n] = (j, best)
+        bound = best
+    return out
 
 
 @dataclass
-class _Candidate:
-    start: int
-    end: int
-    score: float
-    support: int
-    total: int
-    method: str
+class StreamAlignment:
+    matches: list[PageMatch]
+    anchors: int
+    chain_J: list[int]
+    chain_Q: list[int]
 
 
-def _locate_exact(P: str, E: str, lo: int, hi: int, st: MatchSettings) -> _Candidate | None:
-    L = len(P)
-    K = min(st.anchor_len, L)
-    anchors = _anchor_offsets(L, K)
-    hits: list[tuple[int, str, int, int]] = []        # (diag, label, pos, a)
-    for a, label in anchors:
-        needle = P[a:a + K]
-        for pos in _find_all(E, needle, lo, hi):
-            hits.append((pos - a, label, pos, a))
-    if not hits:
+def _refine_start(head: str, E: str, s_est: int, radius: int) -> int | None:
+    """صقل بداية الصفحة بمحاذاة رأسها مع جوار التقدير (أطول مقطع مشترك).
+
+    إن كان في رأس PDF بادئة غير موجودة في EPUB (عنوان/ترويسة زائدة) نبدأ عند المقطع المطابق،
+    وإلا (ضجيج استخراج فقط) نمدّ البداية للخلف بطول البادئة.
+    """
+    if len(head) < 6:
         return None
-    hits.sort()
-    tol = max(30, int(0.06 * L))
+    lo = max(0, s_est - radius)
+    hi = min(len(E), s_est + radius + len(head))
+    win = E[lo:hi]
+    if len(win) < 6:
+        return None
+    sm = difflib.SequenceMatcher(None, win, head, autojunk=False)
+    m = sm.find_longest_match(0, len(win), 0, len(head))
+    if m.size < 6:
+        return None
+    start = lo + m.a
+    if m.b > 0:
+        prefix = head[:m.b]
+        before = E[max(0, start - m.b):start]
+        if before and similarity(prefix, before) >= 0.45:
+            start = max(0, start - m.b)
+    return start if abs(start - s_est) <= radius + 40 else None
 
-    clusters: list[list[tuple[int, str, int, int]]] = []
-    for h in hits:
-        if clusters and h[0] - clusters[-1][0][0] <= tol:
-            clusters[-1].append(h)
+
+def align_stream(page_texts: list[tuple[int, str]], E: str, st: MatchSettings) -> StreamAlignment:
+    """يحاذي نصوص الصفحات (رقم، نص مُطبَّع) على نص EPUB المُطبَّع E."""
+    k = st.anchor_len
+    n_pages = len(page_texts)
+    matches = [PageMatch(page=no, pdf_chars=len(t)) for no, t in page_texts]
+    offs: list[int] = []
+    acc = 0
+    for _, t in page_texts:
+        offs.append(acc)
+        acc += len(t) + 1
+    P = "\n".join(t for _, t in page_texts)
+
+    if not E or len(P) < k + 1:
+        for m in matches:
+            m.status = "empty" if m.pdf_chars == 0 else "unmatched"
+        return StreamAlignment(matches, 0, [], [])
+
+    idx = _build_index(E, k, st.max_occ)
+    pcount: Counter[str] = Counter(P[i:i + k] for i in range(len(P) - k + 1) if "\n" not in P[i:i + k])
+    hits: list[tuple[int, int]] = []
+    for j in range(len(P) - k + 1):
+        g = P[j:j + k]
+        if pcount.get(g) == 1:
+            occ = idx.get(g)
+            if occ:
+                for pos in occ:
+                    hits.append((j, pos))
+
+    chain = _filter_diagonal(_lis(hits), st.diag_window, st.diag_tol)
+    chain = _prefer_latest(chain, P, idx, k)
+    J = [j for j, _ in chain]
+    Q = [q for _, q in chain]
+    logger.info("مرتكزات: %d إصابة | %d في السلسلة بعد الترشيح (نص PDF %d حرفًا)", len(hits), len(chain), len(P))
+
+    for p, (no, t) in enumerate(page_texts):
+        m = matches[p]
+        L = len(t)
+        if L == 0:
+            m.status = "empty"
+            m.notes.append("لا نص في هذه الصفحة")
+            continue
+        if not chain:
+            m.notes.append("لا مرتكزات")
+            continue
+        a, b = offs[p], offs[p] + L
+        i = bisect_left(J, a)
+        m.anchors_hit = bisect_left(J, b) - i
+        m.anchors_total = max(1, (L - k + 1))
+        if m.anchors_hit == 0:
+            m.notes.append("لا مرتكزات داخل الصفحة")   # يُقرَّر لاحقًا: استيفاء أو "ناقصة من EPUB"
+            continue
+        cand = []
+        if i < len(J):
+            cand.append(i)
+        if i > 0:
+            cand.append(i - 1)
+        near = min(cand, key=lambda c: abs(J[c] - a))
+        dist = abs(J[near] - a)
+        if dist <= st.near_anchor or not (i > 0 and i < len(J)):
+            s = Q[near] - (J[near] - a)
         else:
-            clusters.append([h])
+            j0, j1, q0, q1 = J[i - 1], J[i], Q[i - 1], Q[i]
+            slope = (q1 - q0) / max(1, (j1 - j0))
+            s = int(round(q0 + (a - j0) * slope))
+            s = min(max(s, q0), q1)
+        if 0 < dist <= st.near_anchor:
+            ref = _refine_start(t[:48], E, s, st.refine_radius)
+            if ref is not None:
+                s = ref
+        # قيد منطقي: بداية الصفحة تقع بين المرتكز السابق والمرتكز الأول داخل الصفحة
+        lower = Q[i - 1] + 1 if i > 0 else 0
+        upper = Q[i] if i < len(J) and J[i] < b else len(E)
+        s = min(max(s, lower), max(lower, upper))
+        m.start = max(0, min(len(E), s))
+        last = bisect_left(J, b) - 1
+        m.end = min(len(E), Q[last] + k)
+        if m.end <= m.start:
+            m.end = min(len(E), m.start + L)
+        if dist > 4 * k + st.near_anchor:
+            m.status = "fuzzy"
+    return StreamAlignment(matches, len(chain), J, Q)
 
-    cands: list[_Candidate] = []
-    for cl in clusters:
-        support = len({h[3] for h in cl})
-        start_hit = next((h for h in cl if h[1] == "start"), None)
-        end_hit = next((h for h in cl if h[1] == "end"), None)
-        diags = sorted(h[0] for h in cl)
-        median = diags[len(diags) // 2]
-        if start_hit is not None:
-            s = start_hit[2]
+
+# ------------------------------------------------------------------ الحدود النهائية
+
+def compute_boundaries(matches: list[PageMatch], n_e: int) -> list[int]:
+    """فهرس بداية كل صفحة في E: رتيب متزايد، والصفحات الفارغة صفرية الطول، والمجهولة تُستوفى.
+
+    لا يُحذف نص بين صفحتين: كل ما بين بداية صفحة وبداية التالية يخصّها.
+    """
+    N = len(matches)
+    b: list[int | None] = [m.start if m.pdf_chars > 0 else None for m in matches]
+
+    # استيفاء الصفحات النصية التي بلا موضع (بنسبة طول نصها بين أقرب معلومين)
+    i = 0
+    while i < N:
+        if b[i] is not None or matches[i].pdf_chars == 0:
+            i += 1
+            continue
+        j = i
+        while j < N and (b[j] is None):
+            j += 1
+        left = 0
+        for k in range(i - 1, -1, -1):
+            if b[k] is not None:
+                left = max(b[k], matches[k].end or b[k])
+                break
+        right = next((b[k] for k in range(j, N) if b[k] is not None), n_e)
+        right = max(right, left)
+        group = [k for k in range(i, j) if matches[k].pdf_chars > 0]
+        total = sum(matches[k].pdf_chars for k in group) or 1
+        gap = right - left
+        if gap >= 0.3 * total and total >= 20:
+            cum = 0
+            for k in group:
+                b[k] = left + round(gap * cum / total)
+                cum += matches[k].pdf_chars
+                matches[k].status = "interpolated"
+                matches[k].notes.append("موضع الصفحة مستوفى تناسبيًا (ثقة منخفضة) — راجعها")
         else:
-            s = max(lo, median)
-            refined = _refine_start(P, E, s, tol)
-            if refined is not None and abs(refined - s) <= tol:
-                s = refined
-        e = (end_hit[2] + K) if end_hit is not None else min(len(E), s + L)
-        if e <= s:
-            e = min(len(E), s + L)
-        cands.append(_Candidate(s, e, similarity(P, E[s:e]), support, len(anchors), "exact"))
+            for k in group:
+                b[k] = right
+                matches[k].status = "missing"
+                matches[k].notes.append("لا يوجد نص مقابل لهذه الصفحة في EPUB")
+        i = j
 
-    cands.sort(key=lambda c: (-c.support, -c.score, c.start))
-    for c in cands[:4]:
-        ok = (c.support >= 2 and c.score >= st.accept_score) or (c.support == 1 and c.score >= 0.75)
-        if ok:
-            return c
-    return None
+    # الصفحات الفارغة: تأخذ بداية أول صفحة نصية بعدها (طول صفري)
+    nxt = n_e
+    for k in range(N - 1, -1, -1):
+        if b[k] is None:
+            b[k] = nxt
+        else:
+            nxt = b[k]
 
+    out: list[int] = []
+    prev = 0
+    for v in b:
+        v = min(n_e, max(prev, int(v or 0)))
+        out.append(v)
+        prev = v
 
-def _locate_qgram(P: str, E: str, lo: int, hi: int, st: MatchSettings) -> _Candidate | None:
-    q, L = st.qgram, len(P)
-    if L < q + 6 or hi - lo < q:
-        return None
-    B = 24
-    votes: Counter[int] = Counter()
-    gram_hits: list[tuple[int, int]] = []             # (j, pos)
-    grams = 0
-    for j in range(0, L - q + 1, st.qgram_step):
-        grams += 1
-        for pos in _find_all(E, P[j:j + q], lo, hi, limit=4):
-            votes[(pos - j) // B] += 1
-            gram_hits.append((j, pos))
-    if not votes:
-        return None
-    best_b = max(votes, key=lambda b: votes[b] + votes.get(b + 1, 0))
-    total_votes = votes[best_b] + votes.get(best_b + 1, 0)
-    if total_votes / max(1, grams) < st.qgram_min_ratio:
-        return None
-    near = [(j, pos) for j, pos in gram_hits if (pos - j) // B in (best_b, best_b + 1)]
-    diags = sorted(pos - j for j, pos in near)
-    median = diags[len(diags) // 2]
-    s = max(lo, median)
-    refined = _refine_start(P, E, s, 3 * B)
-    if refined is not None and abs(refined - s) <= 3 * B:
-        s = refined
-    tail_hits = [pos + q for j, pos in near if j >= int(L * 0.8)]
-    e = max(tail_hits) if tail_hits else min(len(E), s + L)
-    if e <= s:
-        e = min(len(E), s + L)
-    score = similarity(P, E[s:e])
-    if score < st.accept_score:
-        return None
-    return _Candidate(s, e, score, 0, grams, "fuzzy")
+    # ملاحظة: نص زائد في EPUB بين نهاية صفحة وبداية التالية يلحق بالصفحة السابقة
+    text_pages = [k for k in range(N) if matches[k].pdf_chars > 0]
+    for a, c in zip(text_pages, text_pages[1:]):
+        m = matches[a]
+        gap = out[c] - (m.end if m.end is not None else out[a])
+        if m.status != "interpolated" and gap > max(120, 0.35 * m.pdf_chars):
+            m.notes.append(f"{gap} حرفًا إضافيًا من EPUB بعد آخر مرتكز أُلحقت بهذه الصفحة (ربما نص غير موجود في PDF)")
+    return out
 
 
-def _to_match(page: int, L: int, c: _Candidate) -> PageMatch:
-    return PageMatch(
-        page=page, pdf_chars=L,
-        status="exact" if c.method == "exact" and c.score >= 0.7 else "fuzzy",
-        start=c.start, end=c.end, score=round(c.score, 4),
-        anchors_hit=c.support, anchors_total=c.total,
-    )
+def score_pages(matches: list[PageMatch], page_texts: list[tuple[int, str]], boundaries: list[int],
+                E: str, st: MatchSettings) -> None:
+    """تشابه (Dice) بين نص كل صفحة وما قُصّ لها من EPUB، ثم تحديد الحالة."""
+    n = len(matches)
+    for k, m in enumerate(matches):
+        m.boundary = boundaries[k]
+        if m.pdf_chars == 0:
+            m.status = "empty"
+            continue
+        e = boundaries[k + 1] if k + 1 < n else (m.end if m.end is not None else len(E))
+        seg = E[boundaries[k]:e]
+        m.score = round(similarity(page_texts[k][1], seg), 4)
+        if m.status == "missing":
+            continue
+        if m.pdf_chars >= 60 and len(seg) < 0.15 * m.pdf_chars and m.score < 0.3:
+            m.status = "missing"
+            m.notes.append("لا يوجد نص مقابل لهذه الصفحة في EPUB")
+            continue
+        if m.status == "interpolated":
+            continue
+        if m.anchors_hit >= 1 and m.score < 0.6 and len(seg) < 0.7 * m.pdf_chars:
+            m.status = "partial"
+            m.notes.append(f"نص EPUB أقصر بكثير من نص PDF ({len(seg)} مقابل {m.pdf_chars}) — جزء من الصفحة غير موجود في EPUB")
+            continue
+        if m.anchors_hit >= 2 and m.score >= st.exact_score:
+            m.status = "exact"
+        elif m.score >= st.accept_score:
+            m.status = "fuzzy" if m.anchors_hit < 2 else "exact"
+        else:
+            m.status = "fuzzy"
+            m.notes.append(f"تشابه منخفض ({m.score}) — راجع هذه الصفحة")
 
 
 # ------------------------------------------------------------------ اتجاه نص PDF
 
-def page_match_text(page, st: MatchSettings) -> str:
-    return normalize_for_match(page.match_text(st.include_footnotes))
+def page_texts_for(pdf: PdfDocument, which: str) -> list[tuple[int, str]]:
+    getter = (lambda p: p.body_text()) if which == "body" else (lambda p: p.note_text())
+    return [(p.number, normalize_for_match(getter(p))) for p in pdf.pages]
 
 
-def choose_text_order(pdf: PdfDocument, E: str, st: MatchSettings, sample: int = 8) -> tuple[str, dict[str, float]]:
-    """اكتشاف تلقائي لاتجاه الاستخراج (منطقي/بصري) بقياس إصابات مقاطع قصيرة في EPUB."""
-    rich = sorted((p for p in pdf.pages if p.has_text), key=lambda p: -p.raw_char_count)[:sample]
+def choose_text_order(pdf: PdfDocument, E: str, sample: int = 8) -> tuple[str, dict[str, float]]:
+    """كشف تلقائي لاتجاه الاستخراج (منطقي/بصري) بإصابات مقاطع قصيرة في EPUB."""
+    rich = sorted((p for p in pdf.pages if p.kind in ("text", "mixed")), key=lambda p: -p.raw_char_count)[:sample]
     scores: dict[str, float] = {}
     for mode in ("logical", "reverse_chars", "reverse_words"):
         pdf.set_text_order(mode)
         hits = total = 0
         for p in rich:
-            P = page_match_text(p, st)
+            P = normalize_for_match(p.body_text())
             if len(P) < 60:
                 continue
-            for k in range(6):
-                off = (len(P) - 14) * k // 5
+            for q in range(6):
+                off = (len(P) - 14) * q // 5
                 total += 1
                 if P[off:off + 14] in E:
                     hits += 1
@@ -243,120 +397,3 @@ def choose_text_order(pdf: PdfDocument, E: str, st: MatchSettings, sample: int =
         best = "logical"
     pdf.set_text_order(best)
     return best, scores
-
-
-# ------------------------------------------------------------------ المطابقة التسلسلية
-
-def match_pages(page_texts: list[tuple[int, str]], E: str, st: MatchSettings) -> list[PageMatch]:
-    """مطابقة كل صفحة (رقمها، نصها المُطبَّع) بشكل تسلسلي. يُعيد PageMatch لكل صفحة بالترتيب."""
-    matches: list[PageMatch] = []
-    cursor = 0
-    streak = 0
-    ratio = 1.0
-    n_e = len(E)
-
-    for page_no, P in page_texts:
-        L = len(P)
-        m = PageMatch(page=page_no, pdf_chars=L)
-        if L == 0:
-            m.status = "empty"
-            m.notes.append("لا نص في هذه الصفحة (فارغة أو مصورة)")
-            matches.append(m)
-            continue
-
-        found: _Candidate | None = None
-        if L < st.min_page_chars:
-            hi = min(n_e, cursor + st.base_window + streak * 1500)
-            occ = _find_all(E, P, cursor, hi, limit=2)
-            if len(occ) == 1:
-                found = _Candidate(occ[0], occ[0] + L, 1.0, 1, 1, "exact")
-        else:
-            slack = streak * (3 * L + 1500)
-            hi1 = min(n_e, cursor + int(L * st.window_factor * max(ratio, 1.0)) + st.base_window + slack)
-            for lo, hi, strict in (
-                (cursor, hi1, False),
-                (cursor, min(n_e, cursor + 10 * L + 30000), False),
-                (cursor, n_e, True) if st.global_resync and streak >= 1 else (None, None, True),
-            ):
-                if lo is None:
-                    continue
-                cand = _locate_exact(P, E, lo, hi, st) or _locate_qgram(P, E, lo, hi, st)
-                if cand and strict and not (cand.score >= 0.7):
-                    cand = None
-                if cand:
-                    found = cand
-                    break
-
-        if found is None:
-            streak += 1
-            m.notes.append("لم يُعثر على مطابقة موثوقة")
-            matches.append(m)
-            continue
-
-        m = _to_match(page_no, L, found)
-        anchored_end = found.method == "exact" and found.support >= 2
-        back = int(0.05 * L) if anchored_end else int(0.2 * L)
-        cursor = max(found.start + 1, found.end - back)
-        if anchored_end:
-            ratio = 0.7 * ratio + 0.3 * min(2.0, max(0.5, (found.end - found.start) / L))
-        streak = 0
-        matches.append(m)
-    return matches
-
-
-# ------------------------------------------------------------------ حدود الصفحات
-
-def compute_boundaries(matches: list[PageMatch], n_e: int, st: MatchSettings) -> list[int]:
-    """حساب فهرس بداية كل صفحة في E، مع استيفاء الصفحات غير المطابقة وفرض التزايد الرتيب.
-
-    قاعدة: لا يُحذف أي نص من EPUB؛ أي نص بين نهاية صفحة وبداية التالية يبقى مع الصفحة السابقة.
-    """
-    N = len(matches)
-    b: list[int | None] = [m.start for m in matches]
-    i = 0
-    while i < N:
-        if b[i] is not None:
-            i += 1
-            continue
-        j = i
-        while j < N and b[j] is None:
-            j += 1
-        if i == 0:
-            left = 0
-        else:
-            prev = matches[i - 1]
-            left = max(prev.end if prev.end is not None else (b[i - 1] or 0), b[i - 1] or 0)
-        right = b[j] if j < N else n_e
-        right = max(right, left)
-        weights = [matches[k].pdf_chars for k in range(i, j)]
-        total = sum(weights)
-        gap = right - left
-        if total > 0 and gap >= 0.3 * total:
-            cum = 0
-            for k, w in zip(range(i, j), weights):
-                b[k] = left + round(gap * cum / total)
-                cum += w
-                matches[k].status = "interpolated"
-                matches[k].notes.append("موضع الصفحة مُستوفى تناسبيًا (ثقة منخفضة) — راجعها")
-        else:
-            for k in range(i, j):
-                b[k] = right
-                if matches[k].status != "empty":
-                    matches[k].notes.append("لم يوجد لهذه الصفحة نص مقابل في EPUB؛ تُركت فارغة")
-        i = j
-
-    out: list[int] = []
-    prev = 0
-    for v in b:
-        v = min(n_e, max(prev, int(v or 0)))
-        out.append(v)
-        prev = v
-
-    # ملاحظات الفجوات: نص زائد في EPUB بين نهاية صفحة وبداية التالية
-    for k in range(N - 1):
-        m = matches[k]
-        if m.end is not None and m.start is not None and matches[k + 1].start is not None:
-            gap = matches[k + 1].start - m.end
-            if gap > max(80, 0.25 * m.pdf_chars):
-                m.notes.append(f"{gap} حرفًا إضافيًا من EPUB بعد آخر نقطة مطابقة (ربما حواشٍ) أُلحقت بهذه الصفحة")
-    return out

@@ -59,10 +59,14 @@ class SourceDoc:
     item_id: str
     root: etree._Element
     body: etree._Element
-    spans: dict = field(default_factory=dict)     # عنصر -> (بداية، نهاية)
-    ids: dict[str, int] = field(default_factory=dict)
+    spans: dict = field(default_factory=dict)     # عنصر -> (بداية، نهاية) في تيار المتن أو تيار الحواشي
+    ids: dict[str, tuple[int, int]] = field(default_factory=dict)   # id -> (تيار 0=متن/1=حواشٍ، موضع)
+    note_roots: list = field(default_factory=list)  # جذور عناصر الحواشي بترتيبها
+    skipped: set = field(default_factory=set)       # عناصر فاصلة (hr حواشٍ) تُهمل
     start: int = 0
     end: int = 0
+    nstart: int = 0
+    nend: int = 0
     stylesheets: list[str] = field(default_factory=list)
     title: str = ""
 
@@ -80,6 +84,9 @@ class SourceEpub:
     raw_text: str = ""
     norm_text: str = ""
     norm_map: array = field(default_factory=lambda: array("I"))
+    note_raw: str = ""                 # تيار الحواشي (إن وُجدت) — منفصل عن المتن
+    note_norm: str = ""
+    note_map: array = field(default_factory=lambda: array("I"))
 
     def doc_by_path(self) -> dict[str, SourceDoc]:
         return {d.path: d for d in self.docs}
@@ -132,30 +139,62 @@ def _local(tag: str) -> str:
 
 # ---------------------------------------------------------------- الفهرسة
 
-def _index_doc(doc: SourceDoc, base: int, parts: list[str]) -> int:
-    """يملأ spans/ids لمستند ويضيف نصه إلى parts؛ يُعيد الموضع النهائي."""
-    pos = base
+NOTE_CLASS_PREFIXES = ("footnote", "endnote", "fn")
+NOTE_EPUB_TYPES = {"footnote", "footnotes", "endnote", "endnotes", "rearnote", "rearnotes"}
 
-    def rec(el: etree._Element) -> None:
-        nonlocal pos
-        start = pos
+
+def make_note_detector(extra_classes: tuple[str, ...] = ()):
+    prefixes = tuple(c.lower() for c in NOTE_CLASS_PREFIXES + tuple(extra_classes))
+
+    def is_note(el: etree._Element) -> bool:
+        for c in (el.get("class") or "").split():
+            cl = c.lower()
+            if cl == "fn" or cl.startswith(prefixes):
+                return True
+        types = (el.get(f"{{{OPS_NS}}}type") or "").split()
+        return any(t in NOTE_EPUB_TYPES for t in types)
+
+    return is_note
+
+
+def _index_doc(doc: SourceDoc, base: int, nbase: int, parts: list[str], nparts: list[str],
+               is_note) -> tuple[int, int]:
+    """يملأ spans/ids لمستند. المتن يذهب إلى تيار، والحواشي (class=footnote ...) إلى تيار آخر.
+
+    الحواشي في مواقع المواقع الأصلية تتجمع عادةً في آخر الفصل؛ لذلك نفصلها لتُطابَق على صفحاتها
+    الصحيحة بدل أن تخلط ترتيب المتن.
+    """
+    pos = [base, nbase]
+
+    def rec(el: etree._Element, s: int) -> None:
+        sink = parts if s == 0 else nparts
+        start = pos[s]
         eid = el.get("id")
         if eid and eid not in doc.ids:
-            doc.ids[eid] = start
+            doc.ids[eid] = (s, start)
         if el.text:
-            parts.append(el.text)
-            pos += len(el.text)
+            sink.append(el.text)
+            pos[s] += len(el.text)
         for c in el:
             if isinstance(c.tag, str):
-                rec(c)
+                if s == 0 and is_note(c):
+                    if _local(c.tag) == "hr":
+                        doc.skipped.add(c)
+                        doc.spans[c] = (pos[1], pos[1])
+                    else:
+                        doc.note_roots.append(c)
+                        rec(c, 1)
+                else:
+                    rec(c, s)
             if c.tail:
-                parts.append(c.tail)
-                pos += len(c.tail)
-        doc.spans[el] = (start, pos)
+                sink.append(c.tail)
+                pos[s] += len(c.tail)
+        doc.spans[el] = (start, pos[s])
 
-    rec(doc.body)
-    doc.start, doc.end = base, pos
-    return pos
+    rec(doc.body, 0)
+    doc.start, doc.end = base, pos[0]
+    doc.nstart, doc.nend = nbase, pos[1]
+    return pos[0], pos[1]
 
 
 # ---------------------------------------------------------------- الفهرس (TOC)
@@ -203,7 +242,7 @@ def _parse_ncx(root: etree._Element, ncx_path: str) -> list[TocItem]:
 
 # ---------------------------------------------------------------- القراءة الرئيسية
 
-def read_epub(path: Path) -> SourceEpub:
+def read_epub(path: Path, split_notes: bool = True, note_classes: tuple[str, ...] = ()) -> SourceEpub:
     path = Path(path)
     with zipfile.ZipFile(path) as zf:
         container = _parse_xml(zf.read("META-INF/container.xml"), "container.xml")
@@ -233,7 +272,9 @@ def read_epub(path: Path) -> SourceEpub:
         docs: list[SourceDoc] = []
         spine_paths: set[str] = set()
         parts: list[str] = []
-        pos = 0
+        nparts: list[str] = []
+        pos = npos = 0
+        is_note = make_note_detector(note_classes) if split_notes else (lambda e: False)
         for iid in spine_ids:
             m = manifest.get(iid)
             if not m or m["path"] == nav_path:
@@ -255,7 +296,7 @@ def read_epub(path: Path) -> SourceEpub:
                         doc.stylesheets.append(target)
             title_el = root.find(f"{_X}head/{_X}title")
             doc.title = " ".join((title_el.text or "").split()) if title_el is not None and title_el.text else ""
-            pos = _index_doc(doc, pos, parts)
+            pos, npos = _index_doc(doc, pos, npos, parts, nparts, is_note)
             docs.append(doc)
             spine_paths.add(doc.path)
 
@@ -309,6 +350,9 @@ def read_epub(path: Path) -> SourceEpub:
                      resources=resources, metadata=metadata, toc=toc)
     src.raw_text = "".join(parts)
     src.norm_text, src.norm_map = normalize_with_map(src.raw_text)
-    logger.info("EPUB: %d مستند محتوى | %d حرفًا خامًا | %d حرفًا مُطبَّعًا | %d مورد",
-                len(docs), len(src.raw_text), len(src.norm_text), len(resources))
+    src.note_raw = "".join(nparts)
+    src.note_norm, src.note_map = normalize_with_map(src.note_raw)
+    logger.info("EPUB: %d مستند محتوى | متن: %d حرفًا خامًا / %d مُطبَّعًا | حواشٍ: %d / %d | %d مورد",
+                len(docs), len(src.raw_text), len(src.norm_text), len(src.note_raw), len(src.note_norm),
+                len(resources))
     return src

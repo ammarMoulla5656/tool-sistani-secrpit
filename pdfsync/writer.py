@@ -1,11 +1,12 @@
 """
-pdfsync/writer.py — كتابة EPUB 3 الناتج (صفحة PDF = ملف XHTML)، مع إعادة استخدام EPUBBuilder.
+pdfsync/writer.py — كتابة EPUB 3 الناتج (صفحة PDF = ملف XHTML) بشكل مستقل تمامًا.
 
-يرث من EPUBBuilder الحالي ليستعير توليد شجرة الفهرس (nav) وملف NCX كما هما، ويضيف:
-  - Text/page-NNNN.xhtml لكل صفحة PDF (بالترتيب، عددها = عدد صفحات PDF المستهدفة).
+يُنتج:
+  - Text/page-NNNN.xhtml لكل صفحة PDF؛ الرقم = رقم صفحة PDF نفسه (صفحة 10 في PDF = page-0010.xhtml).
   - nav.xhtml: فهرس EPUB الأصلي مُعاد توجيهه إلى الصفحات الجديدة + page-list لكل الصفحات.
   - toc.ncx للتوافق مع القارئات القديمة.
-  - بقية موارد EPUB الأصلي (صور/CSS/خطوط) بمساراتها الأصلية.
+  - Images/: صور الصفحات المرسومة من PDF (بلا OCR) + موارد EPUB الأصلي بمساراتها.
+  - Styles/pdfsync.css: تنسيق الحواشي وصور الصفحات.
 """
 from __future__ import annotations
 
@@ -14,114 +15,120 @@ import logging
 import posixpath
 import uuid
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 
 from lxml import etree
 
-from config import Config
-from epub_builder import EPUBBuilder, TocNode
-
 from .epub_source import SourceEpub
 from .splitter import PageFragment, page_filename
+from .toc import TocNode
 
 logger = logging.getLogger("book2epub.pdfsync.writer")
 
 _DC_EXTRA_OK = {"date", "description", "subject", "rights", "source", "contributor", "type",
                 "format", "relation", "coverage"}
 
+PDFSYNC_CSS = """\
+/* pdfsync — تنسيق إضافي لصفحات PDF */
+.pdf-page-image { text-align: center; margin: 0; padding: 0; }
+.pdf-page-image img { max-width: 100%; height: auto; }
+.pdf-footnotes { margin-top: 1.6em; font-size: 0.88em; }
+.pdf-footnote-separator { width: 33%; margin: 0.6em 0 0.7em auto; border: 0; border-top: 1px solid currentColor; }
+.pdf-footnotes p { margin: 0.25em 0; text-indent: 0; }
+"""
+
 
 def _serialize(root: etree._Element) -> bytes:
     return etree.tostring(root, encoding="utf-8", xml_declaration=True, doctype="<!DOCTYPE html>")
 
 
-class PageEPUBWriter(EPUBBuilder):
-    def __init__(self, config: Config, title: str):
-        # لا نستدعي EPUBBuilder.__init__ لأنه يتطلب Book من الزاحف؛ نضبط ما تحتاجه الدوال المستعارة فقط.
-        self.config = config
-        self.book = SimpleNamespace(meta=SimpleNamespace(title=title))
+def _nav_ol(node: TocNode, indent: int = 2) -> str:
+    pad = "  " * indent
+    items = []
+    for child in node.children.values():
+        label = html.escape(child.title)
+        inner = (f'<a href="{html.escape(child.target_href)}">{label}</a>' if child.target_href
+                 else f"<span>{label}</span>")
+        sub = _nav_ol(child, indent + 2) if child.children else ""
+        items.append(f"{pad}  <li>{inner}{sub}</li>")
+    return f"\n{pad}<ol>\n" + "\n".join(items) + f"\n{pad}</ol>\n" if items else ""
+
+
+def _ncx_points(node: TocNode, state: dict, fallback: str, indent: int = 2) -> str:
+    """navPoints؛ الأهداف المتطابقة تأخذ playOrder واحدًا (شرط EPUBCheck)."""
+    out = []
+    pad = "  " * indent
+    for child in node.children.values():
+        state["n"] += 1
+        n = state["n"]
+        src = child.target_href or fallback
+        order = state["orders"].setdefault(src, len(state["orders"]) + 1)
+        out.append(f'{pad}<navPoint id="np{n}" playOrder="{order}">\n{pad}  <navLabel><text>{html.escape(child.title)}</text></navLabel>\n'
+                   f'{pad}  <content src="{html.escape(src)}"/>\n'
+                   f'{_ncx_points(child, state, fallback, indent + 1)}{pad}</navPoint>\n')
+    return "".join(out)
+
+
+class PageEPUBWriter:
+    def __init__(self, title: str):
+        self.title = title
         self.book_uuid = f"urn:uuid:{uuid.uuid4()}"
-        from datetime import datetime, timezone
         self.now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    def write(
-        self,
-        output_path: Path,
-        src: SourceEpub,
-        pages: list[PageFragment],
-        toc_root: TocNode,
-        page_labels: list[str],
-        source_note: str,
-    ) -> Path:
+    def write(self, output_path: Path, src: SourceEpub, pages: list[PageFragment], toc_root: TocNode,
+              page_labels: list[str], source_note: str) -> Path:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         opf_dir = src.opf_dir
 
-        def P(rel: str) -> str:          # مسار داخل الأرشيف نسبةً لمجلد OPF
+        def P(rel: str) -> str:
             return posixpath.join(opf_dir, rel) if opf_dir else rel
 
         md = src.metadata
-        title = md.get("title") or "كتاب"
+        title = md.get("title") or self.title or "كتاب"
+        first_page = f"Text/{page_filename(pages[0].number)}"
 
-        # ---- CSS افتراضي عند غياب أي ورقة أنماط في المصدر
-        default_css_path = P("Styles/style.css")
-        needs_default_css = default_css_path not in src.resources and any(
-            (lk.get("href") == "../Styles/style.css")
-            for pg in pages for lk in pg.root.iter("{http://www.w3.org/1999/xhtml}link")
-        )
-        css_bytes = b""
-        if needs_default_css:
-            tpl = self.config.templates_dir / "style.css"
-            css_bytes = (tpl.read_text(encoding="utf-8") if tpl.exists()
-                         else "body { text-align: right; }").encode("utf-8")
-
-        first_css = next((r.path for r in src.resources.values() if r.media_type == "text/css"), None)
-        nav_css = (posixpath.relpath(first_css, opf_dir or ".") if first_css
-                   else ("Styles/style.css" if needs_default_css else None))
-
-        # ---- nav.xhtml: toc + page-list
-        toc_ol = self._render_nav_ol(toc_root)
+        # ---- nav.xhtml
+        toc_html = _nav_ol(toc_root) or (
+            f'\n  <ol>\n    <li><a href="{first_page}">{html.escape(title)}</a></li>\n  </ol>\n')
         page_items = "\n".join(
-            f'    <li><a href="Text/{page_filename(pg.number)}#pg-{pg.number:04d}">{html.escape(page_labels[pg.number - 1])}</a></li>'
-            for pg in pages
-        )
-        css_link = f'  <link rel="stylesheet" type="text/css" href="{nav_css}" />\n' if nav_css else ""
+            f'    <li><a href="Text/{page_filename(pg.number)}#pg-{pg.number:04d}">{html.escape(page_labels[pg.index])}</a></li>'
+            for pg in pages)
         nav_xhtml = (
             '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n'
             '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" '
             'xml:lang="ar" lang="ar" dir="rtl">\n<head>\n  <meta charset="utf-8" />\n'
-            f'  <title>{html.escape(title)} — الفهرس</title>\n{css_link}</head>\n<body>\n'
-            '<nav epub:type="toc" id="toc" class="epub-toc">\n  <h1 class="book-title">فهرس المحتويات</h1>\n'
-            f'{toc_ol}\n</nav>\n'
+            f'  <title>{html.escape(title)} — الفهرس</title>\n</head>\n<body>\n'
+            '<nav epub:type="toc" id="toc">\n  <h1>فهرس المحتويات</h1>'
+            f'{toc_html}</nav>\n'
             '<nav epub:type="page-list" id="page-list" hidden="hidden">\n  <ol>\n'
-            f'{page_items}\n  </ol>\n</nav>\n</body>\n</html>'
-        )
+            f'{page_items}\n  </ol>\n</nav>\n</body>\n</html>')
 
         # ---- toc.ncx
-        navpoints, _ = self._render_ncx_navpoints(toc_root, play_order_start=1)
+        points = _ncx_points(toc_root, {"n": 0, "orders": {}}, first_page)
+        if not points:
+            points = (f'    <navPoint id="np1" playOrder="1"><navLabel><text>{html.escape(title)}</text></navLabel>'
+                      f'<content src="{first_page}"/></navPoint>\n')
         creators = md.get("creators") or []
         ncx = (
             '<?xml version="1.0" encoding="utf-8"?>\n'
             '<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">\n'
             '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1" xml:lang="ar" dir="rtl">\n'
             f'  <head>\n    <meta name="dtb:uid" content="{self.book_uuid}"/>\n'
-            '    <meta name="dtb:depth" content="3"/>\n'
-            '    <meta name="dtb:totalPageCount" content="0"/>\n'
+            '    <meta name="dtb:depth" content="3"/>\n    <meta name="dtb:totalPageCount" content="0"/>\n'
             '    <meta name="dtb:maxPageNumber" content="0"/>\n  </head>\n'
             f'  <docTitle><text>{html.escape(title)}</text></docTitle>\n'
             f'  <docAuthor><text>{html.escape(creators[0] if creators else "")}</text></docAuthor>\n'
-            f'  <navMap>\n{navpoints}  </navMap>\n</ncx>'
-        )
+            f'  <navMap>\n{points}  </navMap>\n</ncx>')
 
         # ---- content.opf
-        used_ids = {"ncx", "nav"} | {f"page_{pg.number:04d}" for pg in pages}
+        used_ids = {"ncx", "nav", "pdfsync_css"} | {f"page_{pg.number:04d}" for pg in pages}
         manifest = [
             '    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>',
             '    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
+            '    <item id="pdfsync_css" href="Styles/pdfsync.css" media-type="text/css"/>',
         ]
-        if needs_default_css:
-            used_ids.add("pdfsync_style")
-            manifest.append('    <item id="pdfsync_style" href="Styles/style.css" media-type="text/css"/>')
         id_map: dict[str, str] = {}
         for r in src.resources.values():
             rid = r.item_id if r.item_id not in used_ids else f"res_{r.item_id}"
@@ -130,6 +137,14 @@ class PageEPUBWriter(EPUBBuilder):
             props = f' properties="{html.escape(r.properties)}"' if r.properties else ""
             href = html.escape(posixpath.relpath(r.path, opf_dir or "."))
             manifest.append(f'    <item id="{html.escape(rid)}" href="{href}" media-type="{r.media_type}"{props}/>')
+        asset_files: dict[str, bytes] = {}
+        for pg in pages:
+            for a in pg.assets:
+                if a.zip_name in asset_files:
+                    continue
+                asset_files[a.zip_name] = a.data
+                aid = f"pgimg_{len(asset_files):04d}"
+                manifest.append(f'    <item id="{aid}" href="Images/{html.escape(a.zip_name)}" media-type="{a.media_type}"/>')
         spine = []
         for pg in pages:
             iid = f"page_{pg.number:04d}"
@@ -146,7 +161,7 @@ class PageEPUBWriter(EPUBBuilder):
         if md.get("publisher"):
             meta_lines.append(f'    <dc:publisher>{html.escape(md["publisher"])}</dc:publisher>')
         for name, text in md.get("extra", []):
-            if name in _DC_EXTRA_OK and text:
+            if name in _DC_EXTRA_OK and text and name != "source":
                 meta_lines.append(f"    <dc:{name}>{html.escape(text)}</dc:{name}>")
         meta_lines.append(f"    <dc:source>{html.escape(source_note)}</dc:source>")
         meta_lines.append(f'    <meta property="dcterms:modified">{self.now_utc}</meta>')
@@ -159,15 +174,13 @@ class PageEPUBWriter(EPUBBuilder):
             '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id" dir="rtl" xml:lang="ar">\n'
             '  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n' + "\n".join(meta_lines) + "\n  </metadata>\n"
             "  <manifest>\n" + "\n".join(manifest) + "\n  </manifest>\n"
-            '  <spine toc="ncx" page-progression-direction="rtl">\n' + "\n".join(spine) + "\n  </spine>\n</package>"
-        )
+            '  <spine toc="ncx" page-progression-direction="rtl">\n' + "\n".join(spine) + "\n  </spine>\n</package>")
 
         container = (
             '<?xml version="1.0" encoding="UTF-8"?>\n'
             '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n'
             f'  <rootfiles>\n    <rootfile full-path="{P("content.opf")}" media-type="application/oebps-package+xml"/>\n'
-            '  </rootfiles>\n</container>'
-        )
+            '  </rootfiles>\n</container>')
 
         with zipfile.ZipFile(output_path, "w") as zf:
             mi = zipfile.ZipInfo("mimetype")
@@ -178,10 +191,11 @@ class PageEPUBWriter(EPUBBuilder):
             zf.writestr(P("content.opf"), opf.encode("utf-8"), compress_type=deflate)
             zf.writestr(P("toc.ncx"), ncx.encode("utf-8"), compress_type=deflate)
             zf.writestr(P("nav.xhtml"), nav_xhtml.encode("utf-8"), compress_type=deflate)
-            if needs_default_css:
-                zf.writestr(default_css_path, css_bytes, compress_type=deflate)
+            zf.writestr(P("Styles/pdfsync.css"), PDFSYNC_CSS.encode("utf-8"), compress_type=deflate)
             for r in src.resources.values():
                 zf.writestr(r.path, r.data, compress_type=deflate)
+            for name, data in asset_files.items():
+                zf.writestr(P(f"Images/{name}"), data, compress_type=zipfile.ZIP_STORED)
             for pg in pages:
                 zf.writestr(P(f"Text/{page_filename(pg.number)}"), _serialize(pg.root), compress_type=deflate)
 

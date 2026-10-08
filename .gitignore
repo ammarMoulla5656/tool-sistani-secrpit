@@ -19,3 +19,6 @@ chk_*.epub
 tests/*.pdf
 tests/*.epub
 tests/*.json
+*.sync-report.json
+*.zip
+test.epub
