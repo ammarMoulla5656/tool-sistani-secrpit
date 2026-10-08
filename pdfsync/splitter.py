@@ -102,6 +102,16 @@ class PageSplitter:
         self.unresolved: list[str] = []
         self._used: set[str] = set()
         self._note_sets = {d.index: set(d.note_roots) for d in src.docs}
+        # الأسلاف الذين يحتوون حواشي: لا يجوز نسخهم دفعة واحدة (وإلا تتكرر الحواشي داخل المتن)
+        self._note_anc: dict[int, set] = {}
+        for d in src.docs:
+            anc: set = set()
+            for r in list(d.note_roots) + list(d.skipped):
+                a = r.getparent()
+                while a is not None and a is not d.body.getparent():
+                    anc.add(a)
+                    a = a.getparent()
+            self._note_anc[d.index] = anc
 
     # ------------------------------------------------------------ مساعدات
 
@@ -155,6 +165,7 @@ class PageSplitter:
               skip_notes: bool) -> None:
         s, _ = doc.spans[src_el]
         notes = self._note_sets[doc.index]
+        anc = self._note_anc[doc.index]
         if src_el.text:
             _add_text(new_el, _slice(src_el.text, s, lo, hi))
         pos = s + len(src_el.text or "")
@@ -176,7 +187,7 @@ class PageSplitter:
                 visible = lo <= cs < hi
             nc: etree._Element | None = None
             if visible:
-                if cs >= lo and ce <= hi:
+                if cs >= lo and ce <= hi and not (skip_notes and c in anc):
                     nc = copy.deepcopy(c)
                     nc.tail = None
                     new_el.append(nc)

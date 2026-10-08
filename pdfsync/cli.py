@@ -45,6 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="اتجاه نص PDF المستخرج (auto: كشف تلقائي)")
     p.add_argument("--digits", choices=["auto", "logical", "reversed"], default="auto",
                    help="اتجاه الأعداد متعددة الخانات في PDF (auto: كشف تلقائي؛ كثير من ملفات PDF تعكسها)")
+    p.add_argument("--pdf-decode", choices=["auto", "native", "glyph"], default="auto",
+                   help="طريقة قراءة نص PDF: native=طبقة النص، glyph=من الخطوط المدمجة (لملفات Word بخطوط قديمة "
+                        "ذات ToUnicode تالف)، auto=يجرّب glyph عند فشل native")
+    p.add_argument("--force", action="store_true", help="تجاوز رفض الملفات التي لا تتطابق (نتائج غير موثوقة)")
     p.add_argument("--images", choices=["auto", "off"], default="auto",
                    help="نقل صور صفحات PDF (الغلاف، اللوحات، الصفحات المصورة) كما هي إلى EPUB (الافتراضي auto)")
     p.add_argument("--image-dpi", type=int, default=170, help="دقة رسم صور الصفحات (170)")
@@ -134,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     ms = MatchSettings(anchor_len=args.anchor_len, accept_score=args.min_score)
     opts = SyncOptions(
         pdf=args.pdf, epub=epub_path, output=args.output, page_range=args.pages,
-        text_order=args.text_order, digits=args.digits, header_frac=args.header_margin,
+        text_order=args.text_order, digits=args.digits, pdf_decode=args.pdf_decode, force=args.force, header_frac=args.header_margin,
         footer_frac=args.footer_margin, page_offset=args.page_offset, trim_edges=args.trim_edges,
         split_notes=not args.no_notes, note_classes=tuple(args.note_class),
         images=args.images, image_dpi=args.image_dpi, fallback_image=not args.no_fallback_image,
@@ -142,7 +146,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     print("📚 مزامنة PDF مع EPUB")
-    res = run_sync(opts, cfg, progress=lambda s: print(f"  • {s}"))
+    from .pipeline import SyncError
+    try:
+        res = run_sync(opts, cfg, progress=lambda s: print(f"  • {s}"))
+    except SyncError as e:
+        print(f"\n❌ {e}")
+        return 3
     r = res.report
     s = r["summary"]
     v = r["verification"]
@@ -150,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"📂 الناتج            : {res.output}")
     print(f"📄 صفحات PDF         : {r['pdf_pages']}  | ملفات الصفحات = صفحات PDF: "
           f"{'نعم' if v['page_files_equal_pdf_pages'] and v['page_file_numbers_equal_pdf_numbers'] else '❌ لا'}")
+    print(f"🔠 قراءة نص PDF       : {'من الخطوط المدمجة (glyph)' if r['pdf_decode'] == 'glyph' else 'طبقة النص الأصلية'}")
     print(f"🔤 اتجاه النص/الأرقام : {r['pdf_text_order']} / {'معكوسة' if r['pdf_digits_reversed'] else 'عادية'}")
     print(f"🎯 متوسط التشابه      : {s['mean_score']}  | الحالات: {s['status']}")
     print(f"🛡️  حفظ نص EPUB حرفيًا : متن {'نعم' if v['body_text_preserved_exactly'] else '❌ لا'}"

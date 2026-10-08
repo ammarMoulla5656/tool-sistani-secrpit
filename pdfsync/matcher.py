@@ -375,23 +375,28 @@ def page_texts_for(pdf: PdfDocument, which: str) -> list[tuple[int, str]]:
     return [(p.number, normalize_for_match(getter(p))) for p in pdf.pages]
 
 
-def choose_text_order(pdf: PdfDocument, E: str, sample: int = 8) -> tuple[str, dict[str, float]]:
-    """كشف تلقائي لاتجاه الاستخراج (منطقي/بصري) بإصابات مقاطع قصيرة في EPUB."""
+def text_hit_rate(pdf: PdfDocument, E: str, sample: int = 12, win: int = 10) -> float:
+    """نسبة مقاطع قصيرة من نص PDF (كما هو مُستخرج حاليًا) الموجودة حرفيًا في EPUB — مقياس سلامة الاستخراج."""
     rich = sorted((p for p in pdf.pages if p.kind in ("text", "mixed")), key=lambda p: -p.raw_char_count)[:sample]
+    hits = total = 0
+    for p in rich:
+        P = normalize_for_match(p.body_text())
+        if len(P) < 3 * win:
+            continue
+        for q in range(8):
+            off = (len(P) - win) * q // 7
+            total += 1
+            if P[off:off + win] in E:
+                hits += 1
+    return hits / total if total else 0.0
+
+
+def choose_text_order(pdf: PdfDocument, E: str, sample: int = 12) -> tuple[str, dict[str, float]]:
+    """كشف تلقائي لاتجاه الاستخراج (منطقي/بصري) بإصابات مقاطع قصيرة في EPUB."""
     scores: dict[str, float] = {}
     for mode in ("logical", "reverse_chars", "reverse_words"):
         pdf.set_text_order(mode)
-        hits = total = 0
-        for p in rich:
-            P = normalize_for_match(p.body_text())
-            if len(P) < 60:
-                continue
-            for q in range(6):
-                off = (len(P) - 14) * q // 5
-                total += 1
-                if P[off:off + 14] in E:
-                    hits += 1
-        scores[mode] = hits / total if total else 0.0
+        scores[mode] = text_hit_rate(pdf, E, sample)
     best = max(scores, key=lambda m: scores[m])
     if scores["logical"] >= max(0.5 * scores[best], 0.05) or scores[best] < 0.1:
         best = "logical"

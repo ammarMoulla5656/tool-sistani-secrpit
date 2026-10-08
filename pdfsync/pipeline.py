@@ -40,6 +40,8 @@ class SyncOptions:
     page_range: tuple[int, int] | None = None
     text_order: str = "auto"                 # auto | logical | reverse_chars | reverse_words
     digits: str = "auto"                     # auto | logical | reversed — اتجاه الأعداد متعددة الخانات في PDF
+    pdf_decode: str = "auto"                 # auto | native | glyph — فك ترميز نص PDF من الخطوط المدمجة
+    force: bool = False                      # تجاوز رفض الملفات التي يتعذّر مطابقتها
     header_frac: float = 0.12
     footer_frac: float = 0.06
     page_offset: int = 0                     # تسمية الصفحة في page-list = رقم صفحة PDF + page_offset
@@ -52,6 +54,11 @@ class SyncOptions:
     validate: bool = True
     report: Path | None = None
     match: MatchSettings = field(default_factory=MatchSettings)
+
+
+@dataclass
+class SyncError(RuntimeError):
+    """فشل المزامنة لسبب يفسّره الوصف (مثل طبقة نص PDF تالفة)."""
 
 
 @dataclass
@@ -197,7 +204,9 @@ def _body_chars(pg: PdfPage) -> list[tuple[float, int]]:
     return [(b.y1, len(re.sub(r"\s+", "", "".join(b.lines)))) for b in pg.blocks if b.kind == "body"]
 
 
-def _make_assets(pdf: PdfDocument, matches: list[PageMatch], opts: SyncOptions) -> tuple[dict[int, list[PageAsset]], dict]:
+def _make_assets(pdf: PdfDocument, matches: list[PageMatch], opts: SyncOptions,
+                 taken: set[str] | None = None) -> tuple[dict[int, list[PageAsset]], dict]:
+    taken = taken or set()
     assets: dict[int, list[PageAsset]] = {}
     info: dict[int, dict] = {}
     if opts.images == "off":
@@ -236,6 +245,10 @@ def _make_assets(pdf: PdfDocument, matches: list[PageMatch], opts: SyncOptions) 
             out.append(PageAsset(f"pdf-page-{pg.number:04d}-1.{ext}", "image/png", data, label))
             if m is not None:
                 m.notes.append("نص الصفحة غير موجود في EPUB — أُدرجت صورة الصفحة من PDF بدلًا منه")
+        for a in out:   # لا تتصادم أسماء الصور مع موارد EPUB الأصلي
+            while a.zip_name in taken:
+                a.zip_name = "sync-" + a.zip_name
+            taken.add(a.zip_name)
         if out:
             assets[pg.number] = out
             info[pg.number] = {"mode": mode, "images": [a.zip_name for a in out]}
@@ -254,11 +267,37 @@ def run_sync(opts: SyncOptions, config=None, progress: Callable[[str], None] | N
         raise ValueError("لا يحتوي EPUB على مستندات محتوى قابلة للمعالجة")
 
     say("تحليل PDF (نص + بنية + صور) — بلا OCR...")
-    pdf: PdfDocument = extract_pdf(opts.pdf, opts.page_range, header_frac=opts.header_frac, footer_frac=opts.footer_frac)
+    pdf: PdfDocument = extract_pdf(opts.pdf, opts.page_range, header_frac=opts.header_frac, footer_frac=opts.footer_frac,
+                                   glyph_decode=(opts.pdf_decode == "glyph"))
+    if opts.pdf_decode == "auto":
+        pdf = _maybe_glyph_decode(pdf, src, opts, say)
     try:
         return _run(opts, config, say, st, src, pdf)
     finally:
         pdf.close()
+
+
+def _maybe_glyph_decode(pdf: PdfDocument, src: SourceEpub, opts: SyncOptions, say) -> PdfDocument:
+    """إن كان نص PDF المستخرج لا يطابق EPUB إطلاقًا (ToUnicode تالف) نجرّب فك الترميز من الخطوط."""
+    order, scores = choose_text_order(pdf, src.norm_text)
+    native = max(scores.values()) if scores else 0.0
+    if native >= 0.25:
+        return pdf
+    say(f"نص PDF المستخرج لا يطابق EPUB (إصابات {native:.0%}) — أجرّب فك الترميز من خطوط PDF المدمجة...")
+    try:
+        alt = extract_pdf(opts.pdf, opts.page_range, header_frac=opts.header_frac, footer_frac=opts.footer_frac,
+                          glyph_decode=True)
+    except ImportError:
+        logger.warning("فك الترميز من الخطوط يحتاج المكتبة fonttools:  pip install fonttools")
+        return pdf
+    _, alt_scores = choose_text_order(alt, src.norm_text)
+    alt_best = max(alt_scores.values()) if alt_scores else 0.0
+    if alt_best > native + 0.1:
+        say(f"فك الترميز من الخطوط رفع الإصابات إلى {alt_best:.0%} — اعتُمد")
+        pdf.close()
+        return alt
+    alt.close()
+    return pdf
 
 
 def _run(opts: SyncOptions, config, say, st: MatchSettings, src: SourceEpub, pdf: PdfDocument) -> SyncResult:
@@ -285,6 +324,13 @@ def _run(opts: SyncOptions, config, say, st: MatchSettings, src: SourceEpub, pdf
     bnorm = compute_boundaries(body_al.matches, len(src.norm_text))
     score_pages(body_al.matches, body_texts, bnorm, src.norm_text, st)
     bm = body_al.matches
+    text_pages = [m for m in bm if m.pdf_chars > 0]
+    good = sum(1 for m in text_pages if m.status in ("exact", "fuzzy", "partial"))
+    if text_pages and good < 0.3 * len(text_pages) and not opts.force:
+        raise SyncError(
+            f"تعذّرت المطابقة: {good} فقط من {len(text_pages)} صفحة نصية طابقت EPUB. غالبًا طبقة نص PDF تالفة "
+            "(ترميز خط قديم) أو أن PDF وEPUB ليسا لنفس الكتاب/الطبعة. جرّب --pdf-decode glyph، "
+            "أو تحقق من الملفين. (--force لتجاوز هذا الرفض)")
 
     # ---- تيار الحواشي
     nm: list[PageMatch] = []
@@ -333,7 +379,8 @@ def _run(opts: SyncOptions, config, say, st: MatchSettings, src: SourceEpub, pdf
 
     # ---- صور الصفحات
     say("نقل صور الصفحات من PDF (بلا OCR)...")
-    assets, asset_info = _make_assets(pdf, bm, opts)
+    taken = {Path(r.path).name for r in src.resources.values()}
+    assets, asset_info = _make_assets(pdf, bm, opts, taken)
 
     # ---- القص
     say("قص محتوى EPUB الأصلي إلى صفحات PDF...")
@@ -426,6 +473,7 @@ def _build_report(opts, src, pdf, out, order, order_scores, rev, trim, bm, nm, l
     return {
         "pdf": str(opts.pdf), "epub": str(opts.epub), "output": str(out),
         "pdf_pages": n_pages, "pdf_total_pages_in_file": pdf.total_pages,
+        "pdf_decode": "glyph" if pdf.glyph_mode else "native",
         "pdf_text_order": order, "pdf_text_order_scores": order_scores, "pdf_digits_reversed": rev,
         "epub_body_chars": len(src.raw_text), "epub_note_chars": len(src.note_raw),
         "trim_edges": trim,

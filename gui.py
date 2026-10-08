@@ -24,7 +24,7 @@ from config import Config
 from downloader import Downloader
 from epub_builder import EPUBBuilder
 from pdfsync.matcher import MatchSettings
-from pdfsync.pipeline import SyncOptions, run_sync
+from pdfsync.pipeline import SyncError, SyncOptions, run_sync
 from scraper import BookScraper
 from validator import EPUBValidator
 
@@ -284,35 +284,43 @@ class BookStudioGUI:
         cb_digits = ttk.Combobox(r_so1, textvariable=self.sync_digits_var, values=["auto", "logical", "reversed"], width=10, state="readonly")
         cb_digits.pack(side=tk.LEFT, padx=(4, 4))
 
-        # السطر 2: نقل الصور والدقة وإزاحة الصفحات
+        # السطر 2: نقل الصور والدقة وفك ترميز الخطوط وإزاحة الصفحات
         r_so2 = ttk.Frame(grp_sync_opts)
         r_so2.pack(fill=tk.X, pady=3)
 
         ttk.Label(r_so2, text="نقل صور PDF (images):", font=FONT_NORMAL).pack(side=tk.LEFT)
         self.sync_images_var = tk.StringVar(value="auto")
         cb_imgs = ttk.Combobox(r_so2, textvariable=self.sync_images_var, values=["auto", "off"], width=8, state="readonly")
-        cb_imgs.pack(side=tk.LEFT, padx=(4, 12))
+        cb_imgs.pack(side=tk.LEFT, padx=(4, 10))
+
+        ttk.Label(r_so2, text="فك ترميز الخطوط (pdf_decode):", font=FONT_NORMAL).pack(side=tk.LEFT)
+        self.sync_pdf_decode_var = tk.StringVar(value="auto")
+        cb_decode = ttk.Combobox(r_so2, textvariable=self.sync_pdf_decode_var, values=["auto", "native", "glyph"], width=8, state="readonly")
+        cb_decode.pack(side=tk.LEFT, padx=(4, 10))
 
         ttk.Label(r_so2, text="دقة الصور (DPI):", font=FONT_NORMAL).pack(side=tk.LEFT)
         self.sync_image_dpi_var = tk.StringVar(value="170")
-        ttk.Entry(r_so2, textvariable=self.sync_image_dpi_var, width=6).pack(side=tk.LEFT, padx=(4, 12))
+        ttk.Entry(r_so2, textvariable=self.sync_image_dpi_var, width=5).pack(side=tk.LEFT, padx=(4, 10))
 
-        ttk.Label(r_so2, text="إزاحة الترقيم (page_offset):", font=FONT_NORMAL).pack(side=tk.LEFT)
+        ttk.Label(r_so2, text="إزاحة الترقيم:", font=FONT_NORMAL).pack(side=tk.LEFT)
         self.sync_page_offset_var = tk.StringVar(value="0")
-        ttk.Entry(r_so2, textvariable=self.sync_page_offset_var, width=6).pack(side=tk.LEFT, padx=(4, 4))
+        ttk.Entry(r_so2, textvariable=self.sync_page_offset_var, width=5).pack(side=tk.LEFT, padx=(4, 4))
 
-        # السطر 3: مربعات الاختيار (الحواشي، الصور البديلة، الحواف، الفحص)
+        # السطر 3: مربعات الاختيار (الحواشي، الصور البديلة، الحواف، الفحص، والتجاوز)
         r_so3 = ttk.Frame(grp_sync_opts)
         r_so3.pack(fill=tk.X, pady=(4, 2))
 
         self.sync_split_notes_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(r_so3, text="فصل الحواشي لأسفل صفحاتها (split_notes)", variable=self.sync_split_notes_var).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(r_so3, text="فصل الحواشي (split_notes)", variable=self.sync_split_notes_var).pack(side=tk.LEFT, padx=(0, 8))
 
         self.sync_fallback_image_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(r_so3, text="صورة بديلة للصفحات الناقصة نصياً (fallback_image)", variable=self.sync_fallback_image_var).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(r_so3, text="صورة بديلة للصفحات الناقصة", variable=self.sync_fallback_image_var).pack(side=tk.LEFT, padx=(0, 8))
 
         self.sync_trim_edges_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(r_so3, text="حذف زوائد EPUB خارج نطاق PDF (trim_edges)", variable=self.sync_trim_edges_var).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(r_so3, text="حذف زوائد EPUB خارج PDF", variable=self.sync_trim_edges_var).pack(side=tk.LEFT, padx=(0, 8))
+
+        self.sync_force_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(r_so3, text="تجاوز ضعف المطابقة (force)", variable=self.sync_force_var).pack(side=tk.LEFT, padx=(0, 8))
 
         self.sync_validate_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(r_so3, text="فحص EPUBCheck", variable=self.sync_validate_var).pack(side=tk.LEFT)
@@ -418,6 +426,7 @@ EPUB 3 متوافقة 100% مع معايير W3C الرسمية، مع الحف�
    - PDF هو مصدر الحقيقة لـ: عدد الصفحات، بداية ونهاية كل صفحة، ومواضع الانتقال والصور.
    - EPUB هو مصدر الحقيقة لـ: النص، التنسيق، الروابط، والحواشي.
 • بدون OCR نهائياً: الصفحات المصورة (غلاف، لوحات) تُرسم بأعلى جودة كصورة من PDF نفسه.
+• فك ترميز الخطوط التالفة (glyph_decode): استخراج الحروف من الخطوط المدمجة مباشرة (عبر fonttools) لملفات Word القديمة.
 • فصل الحواشي (split_notes): تُفصل الحواشي عن المتن وتوضع أسفل صفحتها الأصلية بدقة.
 • كشف تلقائي للأرقام المعكوسة (digits auto) لمعالجة مشكلة اتجاه الأرقام في ملفات PDF العربية.
 • صور بديلة (fallback_image): أي صفحة PDF لا نص لها في EPUB تُدرج كصورة وتُسجل في التقرير.
@@ -656,6 +665,8 @@ EPUB 3 متوافقة 100% مع معايير W3C الرسمية، مع الحف�
                     page_range=page_range,
                     text_order=self.sync_text_order_var.get(),
                     digits=self.sync_digits_var.get(),
+                    pdf_decode=self.sync_pdf_decode_var.get(),
+                    force=self.sync_force_var.get(),
                     header_frac=0.12,
                     footer_frac=0.06,
                     page_offset=page_offset,
@@ -671,6 +682,12 @@ EPUB 3 متوافقة 100% مع معايير W3C الرسمية، مع الحف�
                 res = run_sync(opts, self.config, progress=on_msg)
                 self.last_report_path = res.report_path
                 self.root.after(0, lambda r=res: self._render_sync_result(r))
+            except SyncError as se:
+                logging.warning("SyncError: %s", se)
+                self.root.after(0, lambda err=str(se): messagebox.showerror(
+                    "تعذر إتمام المطابقة",
+                    f"{err}\n\n💡 نصيحة:\n• إذا كان الخط العربي في PDF قديماً أو تالفاً، جرّب ضبط (فك ترميز الخطوط) على 'glyph'.\n• للتجاوز الإجباري، فعّل خيار: تجاوز ضعف المطابقة (force)."
+                ))
             except Exception as e:
                 logging.exception(e)
                 self.root.after(0, lambda err=str(e): messagebox.showerror("خطأ في المزامنة", f"حدث خطأ أثناء المزامنة: {err}"))

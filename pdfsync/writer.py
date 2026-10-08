@@ -130,7 +130,9 @@ class PageEPUBWriter:
             '    <item id="pdfsync_css" href="Styles/pdfsync.css" media-type="text/css"/>',
         ]
         id_map: dict[str, str] = {}
-        for r in src.resources.values():
+        reserved = {P("Styles/pdfsync.css"), P("nav.xhtml"), P("toc.ncx"), P("content.opf")}
+        resources = [r for r in src.resources.values() if r.path not in reserved]
+        for r in resources:
             rid = r.item_id if r.item_id not in used_ids else f"res_{r.item_id}"
             used_ids.add(rid)
             id_map[r.item_id] = rid
@@ -192,7 +194,7 @@ class PageEPUBWriter:
             zf.writestr(P("toc.ncx"), ncx.encode("utf-8"), compress_type=deflate)
             zf.writestr(P("nav.xhtml"), nav_xhtml.encode("utf-8"), compress_type=deflate)
             zf.writestr(P("Styles/pdfsync.css"), PDFSYNC_CSS.encode("utf-8"), compress_type=deflate)
-            for r in src.resources.values():
+            for r in resources:
                 zf.writestr(r.path, r.data, compress_type=deflate)
             for name, data in asset_files.items():
                 zf.writestr(P(f"Images/{name}"), data, compress_type=zipfile.ZIP_STORED)

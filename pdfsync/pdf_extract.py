@@ -127,6 +127,7 @@ class PdfDocument:
     reverse_digits: bool = False
     body_font_size: float = 0.0
     removed_headers: dict[str, int] = field(default_factory=dict)
+    glyph_mode: bool = False
     _mdoc: object = None
 
     def set_text_order(self, mode: str) -> None:
@@ -342,6 +343,7 @@ def extract_pdf(
     header_frac: float = 0.12,
     footer_frac: float = 0.06,
     min_image_frac: float = 0.004,
+    glyph_decode: bool = False,
 ) -> PdfDocument:
     """استخراج بنية PDF صفحةً صفحة. page_range: (أول، آخر) بترقيم يبدأ من 1 وشامل الطرفين."""
     path = Path(path)
@@ -352,6 +354,10 @@ def extract_pdf(
         mdoc.close()
         raise ValueError(f"نطاق الصفحات غير صالح: {page_range} (عدد صفحات الملف {total})")
 
+    decoder = None
+    if glyph_decode:
+        from .glyph_text import GlyphDecoder, glyph_lines
+        decoder = GlyphDecoder(mdoc)
     pages: list[PdfPage] = []
     for pno in range(first, last + 1):
         mp = mdoc[pno - 1]
@@ -359,7 +365,12 @@ def extract_pdf(
         pg = PdfPage(number=pno, width=float(rect.width), height=float(rect.height))
         rm = mp.rotation_matrix if mp.rotation else None
         pg.rm = rm
-        blocks, _ = _parse_blocks(mp.get_text("dict"), pno, rm)
+        if decoder is not None:
+            blocks = [PdfTextBlock(page_number=pno, lines=[ln["text"]], x0=ln["x0"], y0=ln["y0"], x1=ln["x1"],
+                                   y1=ln["y1"], font_size=round(ln["size"], 2), fonts=ln["fonts"])
+                      for ln in glyph_lines(mp, decoder, rm)]
+        else:
+            blocks, _ = _parse_blocks(mp.get_text("dict"), pno, rm)
         pg.blocks = blocks
         pg.raw_char_count = len(re.sub(r"\s+", "", "".join("".join(b.lines) for b in blocks)))
         pg.separator_y = _separator_line(mp, pg.width, pg.height, blocks, rm)
@@ -387,6 +398,9 @@ def extract_pdf(
             mp = mdoc[pg.number - 1]
             pg.drawing_rect = None if pg.images else _drawings_region(mp, pg.width, pg.height, top, getattr(pg, 'rm', None))
 
+    doc.glyph_mode = decoder is not None
+    if decoder is not None:
+        logger.info("فك الترميز من الخطوط: %s", decoder.stats)
     doc.set_text_order("logical")
     for pg in pages:
         _page_kind(pg)
